@@ -1,0 +1,24 @@
+plugins {
+    id 'java-library'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+// The Unix-socket interoperability fixture is a desktop-only test utility.
+tasks.named('compileTestJava') {
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+}
+
+tasks.register('protocolTest', JavaExec) {
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.sufficientlysecure.keychain.remote.agent.AssuanSessionTest'
+}
+
+tasks.named('test') {
+    dependsOn tasks.named('protocolTest')
+}

@@ -1,4 +1,9 @@
-**WARNING: This software is no longer actively developed.**
+This fork adds **embedded Tailscale remote signing** for CodexCloud and GnuPG,
+without Android's system VPN. See [setup, build instructions, and current limits](docs/remote-agent.md).
+The fork requires Android 7+ and initially supports software RSA signing keys with
+SHA-256/384/512 and approval of every request on the phone.
+
+**Upstream maintenance notice: This software is no longer actively developed.**
 We will still apply security fixes where reported, and do basic maintenance work, but no new features or will be worked on.
 We will try to consider and merge contributions where possible.
 
@@ -42,6 +47,11 @@ I am happy about every code contribution and appreciate your effort to help us d
 Development mailinglist at https://lists.riseup.net/www/subscribe/openkeychain
 
 ### Build with Gradle
+
+For this fork, first build the native Tailscale AAR as described in
+[the remote signing guide](docs/remote-agent.md), using JDK 17, Android SDK 34,
+and the pinned Go and Android NDK versions. The historical upstream instructions
+below are retained for reference.
 
 1. Clone the project from GitHub
 2. Get all external submodules with ``git submodule update --init --recursive``

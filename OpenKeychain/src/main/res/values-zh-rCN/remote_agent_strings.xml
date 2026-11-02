@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_agent_title">Tailscale 远端签名</string>
+    <string name="remote_agent_settings_summary">让 CodexCloud 使用此手机上的密钥签名</string>
+    <string name="remote_agent_explanation">应用内接入 Tailscale，无需系统 VPN。签名代理监听 tailnet 的 17373 端口，仅允许指定节点使用已选择的本地 RSA 签名密钥，每次签名均需在手机确认。节点或密钥列表为空时拒绝访问。需要 Android 7 或更高版本。</string>
+    <string name="remote_agent_hostname">Tailscale 设备名称</string>
+    <string name="remote_agent_control">控制服务器 HTTPS 地址（留空使用 Tailscale）</string>
+    <string name="remote_agent_peers">允许的稳定节点 ID（来自 tailscale status --json，逗号分隔）</string>
+    <string name="remote_agent_choose_keys">选择 RSA 签名密钥</string>
+    <string name="remote_agent_connect">连接</string>
+    <string name="remote_agent_disconnect">断开</string>
+    <string name="remote_agent_login">打开 Tailscale 登录</string>
+    <string name="remote_agent_running">签名代理运行中，点击查看登录及连接状态。</string>
+    <string name="remote_agent_sign_request">确认远端签名</string>
+    <string name="remote_agent_key_password">密钥口令（无口令的密钥留空）</string>
+    <string name="remote_agent_approve">允许此次签名</string>
+    <string name="remote_agent_deny">拒绝</string>
+    <string name="remote_agent_approval_details">远端 Tailscale 节点：\n%1$s\n\n签名密钥：\n%2$s\n%3$s\n\n%5$s 摘要：\n%4$s\n\n摘要由远端主机提供，手机无法验证原始文档或 Git 提交。仅确认由你发起的操作。请求将在 90 秒后过期。</string>
+    <string name="remote_agent_no_keys">未找到可用的本地 RSA 签名密钥，请先导入或创建软件 RSA 签名密钥。</string>
+    <string name="remote_agent_reconnect">请先断开，再连接以应用设置。</string>
+    <string name="remote_agent_invalid_hostname">名称以字母或数字开头，最多 63 个字母、数字或连字符。</string>
+    <string name="remote_agent_invalid_control">请输入不含凭据、查询或片段的 HTTPS 服务器地址。</string>
+    <string name="remote_agent_invalid_peers">请输入稳定节点 ID，多个 ID 用逗号分隔。</string>
+    <string name="remote_agent_notifications_required">请启用通知以确认签名请求。</string>
+</resources>

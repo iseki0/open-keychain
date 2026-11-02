@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="remote_agent_title">Tailscale remote signing</string>
+    <string name="remote_agent_settings_summary">Sign from CodexCloud using keys on this phone</string>
+    <string name="remote_agent_explanation">Connect this app to Tailscale without a system VPN. The agent listens on tailnet port 17373. Only the listed node IDs and selected local RSA signing keys are allowed. Each signature requires approval here. Empty node or key lists deny access. Android 7 or later is required.</string>
+    <string name="remote_agent_hostname">Tailscale device name</string>
+    <string name="remote_agent_control">Control server HTTPS URL (blank for Tailscale)</string>
+    <string name="remote_agent_peers">Allowed stable node IDs (comma separated, from tailscale status --json)</string>
+    <string name="remote_agent_choose_keys">Choose RSA signing keys</string>
+    <string name="remote_agent_connect">Connect</string>
+    <string name="remote_agent_disconnect">Disconnect</string>
+    <string name="remote_agent_login">Open Tailscale sign in</string>
+    <string name="remote_agent_running">Agent active. Tap to see login and connection status.</string>
+    <string name="remote_agent_sign_request">Approve remote signature</string>
+    <string name="remote_agent_key_password">Key passphrase (blank for an unprotected key)</string>
+    <string name="remote_agent_approve">Approve this signature</string>
+    <string name="remote_agent_deny">Deny</string>
+    <string name="remote_agent_approval_details">Remote Tailscale peer:\n%1$s\n\nSigning key:\n%2$s\n%3$s\n\n%5$s digest:\n%4$s\n\nThe remote host supplies this digest; the phone cannot verify its original document or Git commit. Approve only an operation you initiated. This request expires after 90 seconds.</string>
+    <string name="remote_agent_no_keys">No usable local RSA signing keys found. Import or create a software RSA signing key first.</string>
+    <string name="remote_agent_reconnect">Configuration saved. Disconnect and connect to apply it.</string>
+    <string name="remote_agent_invalid_hostname">Use up to 63 letters, digits, or hyphens, starting with a letter or digit.</string>
+    <string name="remote_agent_invalid_control">Enter an HTTPS server URL without credentials, query, or fragment.</string>
+    <string name="remote_agent_invalid_peers">Enter stable node IDs separated by commas.</string>
+    <string name="remote_agent_notifications_required">Enable notifications to approve signing requests.</string>
+</resources>

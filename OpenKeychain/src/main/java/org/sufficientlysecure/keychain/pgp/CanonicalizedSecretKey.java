@@ -20,6 +20,7 @@ package org.sufficientlysecure.keychain.pgp;
 
 import java.nio.ByteBuffer;
 import java.security.PrivateKey;
+import java.security.GeneralSecurityException;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.util.Date;
@@ -50,6 +51,7 @@ import org.sufficientlysecure.keychain.pgp.exception.PgpGeneralException;
 import org.sufficientlysecure.keychain.daos.KeyWritableRepository;
 import org.sufficientlysecure.keychain.service.input.CryptoInputParcel;
 import org.sufficientlysecure.keychain.util.Passphrase;
+import org.sufficientlysecure.keychain.remoteagent.crypto.RsaAgentCrypto;
 import timber.log.Timber;
 
 
@@ -396,6 +398,29 @@ public class CanonicalizedSecretKey extends CanonicalizedPublicKey {
         }
 
         return (ECPrivateKey) retVal;
+    }
+
+    /** Signs the already-computed GnuPG digest without exposing the private key. */
+    public byte[] signRsaDigest(int hashAlgorithm, byte[] digest) throws PgpGeneralException {
+        if (mPrivateKeyState != PRIVATE_KEY_STATE_UNLOCKED || mPrivateKey == null) {
+            throw new PgpGeneralException("Remote signing requires an unlocked local software key");
+        }
+        if (getAlgorithm() != PublicKeyAlgorithmTags.RSA_GENERAL
+                && getAlgorithm() != PublicKeyAlgorithmTags.RSA_SIGN) {
+            throw new PgpGeneralException("Remote signing supports RSA keys only");
+        }
+        try {
+            PrivateKey privateKey = new JcaPGPKeyConverter()
+                    .setProvider(Constants.BOUNCY_CASTLE_PROVIDER_NAME).getPrivateKey(mPrivateKey);
+            return RsaAgentCrypto.signDigest(privateKey, hashAlgorithm, digest,
+                    Constants.BOUNCY_CASTLE_PROVIDER_NAME);
+        } catch (PGPException | GeneralSecurityException e) {
+            throw new PgpGeneralException("Error signing agent digest", e);
+        } finally {
+            // This operation has no passphrase or unlocked-key cache across requests.
+            mPrivateKey = null;
+            mPrivateKeyState = PRIVATE_KEY_STATE_LOCKED;
+        }
     }
 
     public byte[] getIv() {

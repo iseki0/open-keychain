@@ -4,6 +4,8 @@ local.properties
 release.properties
 *.class
 *.apk
+__pycache__/
+*.py[cod]
 
 # Gradle
 .gradle

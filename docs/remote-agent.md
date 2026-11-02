@@ -1,0 +1,226 @@
+# Tailscale remote signing
+
+This fork adds a separate Tailscale node inside OpenKeychain and a signing-only
+GnuPG agent endpoint. Android does not use `VpnService`, create a TUN device, or
+reserve the phone's system VPN slot. The listener exists inside the embedded
+Tailscale userspace network, on TCP port **17373**; it is not bound to Wi-Fi,
+cellular, localhost, or a public interface.
+
+The first version supports **Android 7.0 / API 24 or later**, **software RSA
+signing keys**, and **SHA-256, SHA-384, and SHA-512**. Existing OpenKeychain keys
+remain in the phone's key storage. Each signature requires an explicit approval
+and key passphrase on the phone, including when the key has no passphrase.
+ECC, hardware-token keys, decryption, private-key export, SSH agent forwarding,
+and unattended approval are outside this version's scope.
+
+## Build
+
+Initialize the existing submodules and install JDK 17, the Android SDK, NDK
+28.2.13676358, and Go 1.27.3+. Use the exact dependency versions recorded in
+`native/tailscale/go.mod` and `native/build-android.sh`.
+
+```sh
+git submodule update --init --recursive
+export ANDROID_HOME=/path/to/android-sdk
+sdkmanager 'platforms;android-34' 'build-tools;34.0.0' 'ndk;28.2.13676358'
+bash native/build-android.sh
+./gradlew :OpenKeychain:assembleDebug
+```
+
+The native build script creates `native/tailscale/tailagent.aar` from source. The native
+bridge also supplies an Android interface enumeration adapter, since ordinary
+Go netlink enumeration is restricted in Android application sandboxes.
+Generated AARs, Tailscale state, and credentials must not be committed.
+
+The debug APK installs alongside the upstream app with its own private storage
+(`org.sufficientlysecure.keychain.debug`). It cannot read keys from the upstream
+app's sandbox. Import your key locally into this fork on the phone, or create a
+new key there; only export the public part to the cloud machine.
+
+Some unavailable legacy JCenter artifacts are restored using the original
+upstream sources and licenses under `extern/html-textview` and
+`extern/flexible-adapter*`. The per-module READMEs record the exact source tags
+and commits. Nordpol and ChipsLayoutManager use their upstream JitPack builds.
+
+## Pair the phone and the cloud node
+
+1. Import or create an RSA signing key in this fork of OpenKeychain. Export its **public key**
+   to the cloud machine. Never send a secret-key export or passphrase there.
+2. In OpenKeychain Settings, open **Tailscale remote signing**. Set a hostname and, if
+   needed, an HTTPS Headscale control URL. Leave the control URL empty for
+   Tailscale's hosted service. Select the exact signing-key fingerprints to expose.
+3. Connect and use the displayed login link to enroll the embedded node. It has
+   its own node identity, independent of any Tailscale Android app installed on
+   the phone. Note the phone's Tailscale IP from the status display.
+4. Put the authorized cloud node's **stable NodeID** in the peer allowlist. This
+   is the `ID` value from `tailscale status --json` (`Self.ID` when run on the
+   cloud node), not its hostname, Tailscale IP, machine key, or user ID. For a
+   managed cloud environment, obtain the sidecar node's ID from the environment
+   operator/Tailscale administration. An empty allowlist denies every connection.
+   Reconnect after changing peers or key selections.
+5. Grant that cloud node access to the phone's TCP port 17373 in the tailnet
+   policy. Also allow the phone's login flow and normal Tailscale connectivity.
+   Broader pre-existing allow-all rules must be removed if you intend the
+   network policy itself to restrict this port. The application's exact NodeID
+   allowlist still applies independently.
+6. Allow OpenKeychain notifications. Keep its foreground notification enabled
+   while signing. If the phone suspends connectivity, check its battery-saving
+   restrictions for OpenKeychain. Start and stop remote signing explicitly; it
+   does not automatically start after boot.
+
+An example Tailscale grant (replace the tag assignments with your own) is:
+
+```json
+{
+  "tagOwners": {
+    "tag:codex-signer": ["autogroup:admin"],
+    "tag:openkeychain": ["autogroup:admin"]
+  },
+  "grants": [
+    {
+      "src": ["tag:codex-signer"],
+      "dst": ["tag:openkeychain"],
+      "ip": ["tcp:17373"]
+    }
+  ]
+}
+```
+
+Assign the source tag only to authorized cloud nodes. App-level authentication
+uses Tailscale `WhoIs` on each accepted connection and checks the stable NodeID;
+merely belonging to the same tailnet does not authorize signing.
+
+The embedded Tailscale node state is stored under the application's private
+`files/tailnet-agent` directory and survives a normal disconnect. Reinstalling
+or clearing application data creates a new identity; revoke the old node in
+Tailscale administration as appropriate. OpenKeychain's existing application
+backup restriction also covers this state.
+
+## Use from CodexCloud
+
+The Python helper needs Python 3.9+, GnuPG 2.2+, and the phone's literal
+Tailscale IPv4 or IPv6 address. It creates a fresh private `GNUPGHOME` for one
+command, imports the supplied public key, and connects that home's GnuPG agent
+socket to the phone. It neither starts a local agent nor kills or replaces an
+existing one. All keys for that command must be in the supplied public-key file.
+The helper currently accepts the standard Tailscale address ranges only; custom
+Headscale address ranges are not supported.
+
+For an ordinary machine with an existing Tailscale route:
+
+```sh
+python3 tools/remote-gpg-agent/remote_agent.py \
+  --host 100.101.102.103 --public-key /path/to/phone-public.asc \
+  -- gpg --armor --detach-sign --local-user YOUR_SIGNING_FINGERPRINT file.txt
+```
+
+For **managed CodexCloud**, Tailscale normally runs in the environment's
+sidecar. The executor itself has no VPN interface or direct tailnet route.
+The environment must have its supported VPN configuration enabled **and** an
+explicit TCP grant for the phone's IP (for example its exact `/32` IPv4 CIDR).
+Then use the approved raw TCP CONNECT listener:
+
+```sh
+python3 tools/remote-gpg-agent/remote_agent.py \
+  --host 100.101.102.103 --public-key /path/to/phone-public.asc \
+  --http-connect proxy:8088 \
+  -- gpg --armor --detach-sign --local-user YOUR_SIGNING_FINGERPRINT file.txt
+```
+
+Check `/etc/codex/network-policy.json` and the environment's supported readiness
+status before diagnosing this path. A missing VPN configuration, empty TCP
+grants, a 403 CONNECT response, or a `vpn_not_ready` response requires the
+environment configuration/operator workflow. HTTP destination permissions and
+the ordinary HTTP proxy at port 8080 do not grant raw TCP access. Preserve the
+inherited proxies; do not install a second Tailscale daemon in a managed
+executor to work around the policy. The current development environment has
+not been used to make a real tailnet connection to a phone.
+
+Git signing works in the same session:
+
+```sh
+python3 tools/remote-gpg-agent/remote_agent.py \
+  --host 100.101.102.103 --public-key /path/to/phone-public.asc \
+  --http-connect proxy:8088 \
+  -- git -c gpg.format=openpgp -c gpg.program=gpg \
+         -c user.signingkey=YOUR_SIGNING_FINGERPRINT commit -S -m 'Signed change'
+```
+
+Replace the example address and fingerprint. Use the exact selected RSA
+signing-key/subkey fingerprint; a `!` suffix can force a particular subkey in
+GnuPG when necessary. The disposable home disappears when the command ends,
+so this helper does not retain trustdb changes, imported keys, or agent sockets.
+For several operations in one session, run `-- bash` and execute commands from
+that shell.
+
+## Optional userspace Tailscale on a self-managed Linux host
+
+This alternative is for a host you administer, not a replacement for a managed
+cloud environment's supported sidecar setup. If you do not want a system VPN
+on that host, use Tailscale's userspace SOCKS5 proxy:
+
+```sh
+install -d -m 700 "$HOME/.local/state/openkeychain-tailnet"
+tailscaled --tun=userspace-networking \
+  --state="$HOME/.local/state/openkeychain-tailnet/tailscaled.state" \
+  --socket="$HOME/.local/state/openkeychain-tailnet/tailscaled.sock" \
+  --socks5-server=127.0.0.1:1055
+```
+
+Keep that process running, and enroll it from a second terminal:
+
+```sh
+tailscale --socket="$HOME/.local/state/openkeychain-tailnet/tailscaled.sock" \
+  up --hostname=codex-signing
+tailscale --socket="$HOME/.local/state/openkeychain-tailnet/tailscaled.sock" \
+  status --json
+python3 tools/remote-gpg-agent/remote_agent.py \
+  --host 100.101.102.103 --public-key /path/to/phone-public.asc \
+  --socks5 127.0.0.1:1055 \
+  -- gpg --armor --detach-sign --local-user YOUR_SIGNING_FINGERPRINT file.txt
+```
+
+The SOCKS5 proxy must bind to loopback. Treat its state directory as a
+credential. Reenrolling an ephemeral cloud node can change its stable NodeID;
+update the phone's allowlist and revoke old nodes.
+
+## Approval and limits
+
+Open the signing-request notification on the phone. The approval screen shows
+the authenticated peer, selected key, hash algorithm, and digest. Confirm and
+enter the passphrase there. Rejecting, timing out, stopping the service, or
+changing the enabled key selection fails the request. Passphrases are not sent
+to the cloud or intentionally cached by this feature.
+
+GnuPG agent signing transports a **digest**, so the phone cannot independently
+show the original document, Git diff, or commit message. Remote-provided
+descriptions are not proof of content. Grant access only to cloud nodes you
+intend to authorize and check the displayed peer/key/digest before approval.
+
+The transport limits simultaneous connections and idle waits. If a connection
+expires while waiting, retry the command and approve the new request. The
+implementation fails closed for unsupported keys and agent commands. Public
+key metadata for the phone-selected keys can be read by an authorized peer;
+private key export and decryption are unavailable.
+
+## Verification
+
+Run the Python transport/isolation tests without a phone:
+
+```sh
+cd tools/remote-gpg-agent
+python3 -m unittest -v test_remote_agent.py
+```
+
+The tests cover binary relay and half-closes, private socket permissions,
+existing-agent preservation, SOCKS5, HTTP CONNECT, GnuPG socket interoperability,
+and rejection of secret-key input. The GnuPG tests generate a disposable key and
+stop only the reference agent belonging to that disposable test home. JVM
+protocol tests live in `remote-agent-protocol/test.sh`; native tests live in
+`native/tailscale`. A passing local test suite does not establish Android
+device, login, notification, or live tailnet interoperability.
+
+To exercise real detached signatures and signed Git commits through both the
+Python client and Java Assuan protocol, run `python3 integration_test.py` from
+the helper directory. This uses a local test CONNECT proxy and a disposable
+reference key, without contacting a phone or an external network.

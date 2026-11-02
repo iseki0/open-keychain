@@ -122,6 +122,12 @@ public class SettingsActivity extends AppCompatPreferenceActivity {
     public void onBuildHeaders(List<Header> target) {
         super.onBuildHeaders(target);
         loadHeadersFromResource(R.xml.preference_headers, target);
+        for (Header header : target) {
+            if (header.id == R.id.remote_agent_header) {
+                header.intent = new Intent(this,
+                        org.sufficientlysecure.keychain.remoteagent.RemoteAgentActivity.class);
+            }
+        }
     }
 
     /**

@@ -21,6 +21,13 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        maven {
+            url 'https://jitpack.io'
+            content {
+                includeGroup 'com.github.fidesmo.nordpol'
+                includeGroup 'com.github.BelooS'
+            }
+        }
         // needed for some legacy libs that aren't available on mavenCentral
         jcenter()
     }

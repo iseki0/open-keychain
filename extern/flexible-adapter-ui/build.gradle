@@ -1,0 +1,15 @@
+plugins { id 'com.android.library' }
+
+android {
+    namespace 'eu.davidea.flexibleadapter.helpers'
+    compileSdkVersion rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdkVersion 15
+        buildConfigField 'String', 'VERSION_NAME', '"5.1.0"'
+    }
+}
+
+dependencies {
+    compileOnly project(':extern:flexible-adapter')
+    implementation 'com.google.android.material:material:1.11.0'
+}
