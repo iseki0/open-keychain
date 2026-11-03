@@ -201,13 +201,16 @@ class GnuPGTests(unittest.TestCase):
         options = argparse.Namespace(public_key=str(self.public_key), host="100.101.102.103",
                                      port=17373, socks5=None,
                                      command=["--", "python3", "-c",
-                                              "import os,pathlib,stat; p=pathlib.Path(os.environ['GNUPGHOME']); "
+                                              "import os,pathlib,stat,subprocess; p=pathlib.Path(os.environ['GNUPGHOME']); "
                                               "assert stat.S_IMODE(p.stat().st_mode)==0o700; "
-                                              "assert (p/'S.gpg-agent').is_socket(); "
+                                              "agent_socket=pathlib.Path(subprocess.check_output("
+                                              "['gpgconf','--list-dirs','agent-socket'],text=True).strip()); "
+                                              "assert agent_socket.is_socket(); "
                                               "assert (p/'gpg.conf').read_text()=='no-autostart\\n'; "
                                               "assert not any((p/'private-keys-v1.d').glob('*')); "
                                               "raise SystemExit(17)"])
-        existing = Path(self.reference.name) / "S.gpg-agent"
+        existing = Path(subprocess.check_output(["gpgconf", "--list-dirs", "agent-socket"],
+                                                env=self.environment, text=True).strip())
         before = existing.stat().st_ino
         self.assertEqual(remote_agent.run_session(options), 17)
         self.assertEqual(existing.stat().st_ino, before)

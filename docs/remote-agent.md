@@ -13,6 +13,19 @@ and key passphrase on the phone, including when the key has no passphrase.
 ECC, hardware-token keys, decryption, private-key export, SSH agent forwarding,
 and unattended approval are outside this version's scope.
 
+## Download the APK
+
+Open the [GitHub preview releases](https://github.com/iseki0/open-keychain/releases)
+and download `OpenKeychain-remote-signing-preview.apk` from Assets. Each preview
+also includes `SHA256SUMS`. After a successful build on the feature branch, CI
+publishes a preview tied to the source commit. These are debug previews; start
+with a test key while physical-device and live-tailnet validation is pending.
+
+The workflow also uploads an APK artifact to its Actions run; downloading an
+Actions artifact requires GitHub sign-in. A cloud workspace path such as
+`/workspace/.../OpenKeychain-debug.apk` is an internal file location and is not
+a public download URL.
+
 ## Build
 
 Initialize the existing submodules and install JDK 17, the Android SDK, NDK

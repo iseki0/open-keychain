@@ -1,5 +1,6 @@
 This fork adds **embedded Tailscale remote signing** for CodexCloud and GnuPG,
 without Android's system VPN. See [setup, build instructions, and current limits](docs/remote-agent.md).
+Download this fork's APK from the [preview releases](https://github.com/iseki0/open-keychain/releases).
 The fork requires Android 7+ and initially supports software RSA signing keys with
 SHA-256/384/512 and approval of every request on the phone.
 

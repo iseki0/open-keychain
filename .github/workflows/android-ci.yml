@@ -11,7 +11,12 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # The Android bridge compiles three ABIs; bound Go compiler memory on hosted runners.
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,6 +30,10 @@ jobs:
           go-version: '1.27.3'
           cache-dependency-path: native/tailscale/go.sum
       - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '13114758'
+          # setup-android v3 also installs obsolete "tools" by default.
+          packages: 'platform-tools'
       - name: Install Android components
         run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0' 'ndk;28.2.13676358'
       - name: Test Tailscale bridge
@@ -35,14 +44,61 @@ jobs:
           remote-agent-protocol/test.sh
           python3 tools/test-remote-rsa.py
       - name: Build embedded Tailscale
-        run: native/build-android.sh
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" native/build-android.sh
       - name: Test cloud socket bridge
         run: |
           python3 -m unittest discover -s tools/remote-gpg-agent -p 'test_*.py'
           python3 tools/remote-gpg-agent/integration_test.py
       - name: Build Android app and test signing
-        run: ./gradlew :OpenKeychain:assembleDebug :OpenKeychain:testDebugUnitTest --tests 'org.sufficientlysecure.keychain.remoteagent.*'
+        run: >-
+          ./gradlew --no-daemon --max-workers=2
+          -Dorg.gradle.jvmargs='-Xms128m -Xmx3072m'
+          -Pkotlin.compiler.execution.strategy=in-process
+          :OpenKeychain:assembleDebug :OpenKeychain:testDebugUnitTest
+          --tests 'org.sufficientlysecure.keychain.remoteagent.*'
       - uses: actions/upload-artifact@v4
         with:
           name: openkeychain-remote-signing-debug
           path: OpenKeychain/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  publish-preview:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feature/tailscale-gpg-agent'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: openkeychain-remote-signing-debug
+          path: preview
+      - name: Publish downloadable preview APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd preview
+          mv OpenKeychain-debug.apk OpenKeychain-remote-signing-preview.apk
+          sha256sum OpenKeychain-remote-signing-preview.apk > SHA256SUMS
+          tag="remote-signing-preview-${GITHUB_SHA:0:7}"
+          cat > notes.md <<'NOTES'
+          Android 7+ Debug preview of embedded Tailscale remote signing.
+
+          Supports software RSA keys and per-request approval on the phone. The APK is built and tested by this workflow, but physical-device and live-tailnet validation remain outstanding. Start with a test key.
+
+          This debug app installs alongside upstream OpenKeychain with separate private storage. Download the APK and SHA256SUMS from Assets below.
+          NOTES
+          printf '\nSource: %s\n\nSetup: https://github.com/%s/blob/%s/docs/remote-agent.md\n' \
+            "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes.md
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --latest=false --title "Tailscale remote signing preview (${GITHUB_SHA:0:7})" \
+              --notes-file notes.md OpenKeychain-remote-signing-preview.apk SHA256SUMS
+          fi
+          {
+            printf '### Download APK\n\n'
+            printf '[APK](https://github.com/%s/releases/download/%s/OpenKeychain-remote-signing-preview.apk)\n\n' "$GITHUB_REPOSITORY" "$tag"
+            printf '[Checksums](https://github.com/%s/releases/download/%s/SHA256SUMS)\n' "$GITHUB_REPOSITORY" "$tag"
+          } >> "$GITHUB_STEP_SUMMARY"
