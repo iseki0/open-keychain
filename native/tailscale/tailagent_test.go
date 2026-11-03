@@ -101,6 +101,30 @@ func TestStartErrorsPreserveStageAndCause(t *testing.T) {
 	}
 }
 
+func TestStartCachesRecoveredPanic(t *testing.T) {
+	n, err := NewNode(t.TempDir(), "openkeychain", "", "", 9476, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := n.server
+	// Panic before touching the filesystem, engine, or network. An upstream
+	// initialization panic must remain a failure on every subsequent Start.
+	n.server = nil
+	err = n.Start()
+	n.server = server
+	defer n.Close()
+	if err == nil || !strings.Contains(err.Error(), "native Tailscale operation failed:") {
+		t.Fatalf("panic was not returned as an error: %v", err)
+	}
+	if repeated := n.Start(); repeated != err {
+		t.Fatalf("repeated Start lost recovered error: first %v, repeated %v", err, repeated)
+	}
+	logs, logErr := n.DrainLogsJSON()
+	if logErr != nil || !strings.Contains(logs, "native Tailscale operation failed:") {
+		t.Fatal("recovered startup panic absent from diagnostics")
+	}
+}
+
 func TestBinaryConnectionAndEOF(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

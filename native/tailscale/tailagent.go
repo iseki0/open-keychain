@@ -27,6 +27,11 @@ import (
 const idleTimeout = 2 * time.Minute
 const maxConnections = 4
 
+// TS_LOGS_DIR is process-wide. Keep its configuration and backend initialization
+// together even if two callers attempt to start nodes at the same time. Android's
+// service runs one node; retain the setting for any later internal log writers.
+var tailscaleStartupMu sync.Mutex
+
 // Node owns an independent Tailscale identity. Close it when the Android service stops.
 // All exported operations return errors rather than allowing a panic across JNI.
 type Node struct {
@@ -109,7 +114,6 @@ func (n *Node) allowsPeer(id string) bool {
 // Start initializes the listener and returns before interactive login completes.
 // Repeated Start calls return the original result. Close may race any operation.
 func (n *Node) Start() (err error) {
-	defer recoverError(&err)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.closed {
@@ -119,28 +123,42 @@ func (n *Node) Start() (err error) {
 		return n.startErr
 	}
 	n.started = true
+	// Recover before caching the result and releasing mu. A backend panic must
+	// not make a later Start report success on a partly initialized server.
+	defer func() {
+		n.startErr = err
+		if err != nil {
+			n.logf("%v", err)
+		}
+	}()
+	defer recoverError(&err)
 	n.logf("Starting embedded Tailscale")
-	if err = n.server.Start(); err != nil {
-		n.startErr = fmt.Errorf("start embedded Tailscale: %w", err)
-		n.logf("%v", n.startErr)
-		return n.startErr
+	if err = n.startServer(); err != nil {
+		return fmt.Errorf("start embedded Tailscale: %w", err)
 	}
 	n.logf("Tailscale backend initialized; creating local API client")
 	n.client, err = n.server.LocalClient()
 	if err != nil {
-		n.startErr = fmt.Errorf("create Tailscale local API client: %w", err)
-		n.logf("%v", n.startErr)
-		return n.startErr
+		return fmt.Errorf("create Tailscale local API client: %w", err)
 	}
 	n.logf("Creating tailnet Assuan listener on port %d", n.port)
 	n.listener, err = n.server.Listen("tcp", ":"+strconv.Itoa(int(n.port)))
 	if err != nil {
-		n.startErr = fmt.Errorf("create tailnet Assuan listener: %w", err)
-		n.logf("%v", n.startErr)
-		return n.startErr
+		return fmt.Errorf("create tailnet Assuan listener: %w", err)
 	}
 	n.logf("Embedded Tailscale initialized; waiting for login or incoming connections")
 	return nil
+}
+
+func (n *Node) startServer() error {
+	tailscaleStartupMu.Lock()
+	defer tailscaleStartupMu.Unlock()
+	logDir, err := prepareTailscaleLogDir(n.server.Dir)
+	if err != nil {
+		return err
+	}
+	n.logf("Tailscale internal log directory: %s", logDir)
+	return n.server.Start()
 }
 
 // StatusJSON returns Tailscale's status, including BackendState, AuthURL,

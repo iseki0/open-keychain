@@ -297,9 +297,19 @@ generic Java error wrapper. It does not identify an HTTP proxy failure, and an
 empty node box does not affect Tailscale startup. The updated screen shows the
 native error text, and the log identifies which startup operation failed. If
 the node fails before obtaining an AuthURL, the Tailscale sign-in button remains
-disabled. For Android 17 build `CP3A.260905.009`, the actual startup failure must
-be diagnosed from those new details; it has not been reproduced on a physical
-device in this development environment.
+disabled. A log from Android 17 build `CP3A.260905.009` identified a concrete
+failure: `no safe place found to store log state`. The internal LocalBackend
+asks Tailscale's log policy for a directory separately from `tsnet.Server.Dir`;
+Android's missing desktop home/cache and writable temporary-directory defaults
+can make that lookup panic even after the network engine has initialized.
+
+Before starting Tailscale, this fork now creates a private `logs` subdirectory
+under its existing `files/tailnet-agent` state directory with mode 0700 and sets
+the supported `TS_LOGS_DIR` configuration to that path. It preserves existing
+node state and key storage. A recovered startup panic is cached as a failure,
+so a repeated start cannot falsely report success. The regression reproduces
+the upstream directory-selection panic in an isolated environment and checks
+the configured path; complete connectivity still requires a device retest.
 
 If the key list is empty, check the log's package ID and local public/secret-key
 inventory. The debug preview has separate private storage from upstream
