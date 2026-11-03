@@ -56,6 +56,26 @@ jobs:
           -Pkotlin.compiler.execution.strategy=in-process
           :OpenKeychain:assembleDebug :OpenKeychain:testDebugUnitTest
           --tests 'org.sufficientlysecure.keychain.remoteagent.*'
+      - name: Test Ed25519 agent and gpg-bridge OpenPGP signatures
+        run: |
+          python3 tools/test-remote-ed25519.py
+          python3 tools/test-gpg-bridge-pgp.py
+      - name: Check out pinned upstream gpg-bridge client
+        uses: actions/checkout@v4
+        with:
+          repository: iseki0/gpg-bridge
+          ref: 60454d9354d02ae7f0288df110026d2aa1de8b59
+          path: .interop/gpg-bridge
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - name: Build pinned upstream gpg-bridge client
+        run: cargo build --release --locked --jobs 2 --manifest-path .interop/gpg-bridge/Cargo.toml
+      - name: Test actual Rust gpg-bridge client interoperability
+        run: >-
+          python3 tools/gpg-bridge-integration/integration_test.py
+          --binary "$GITHUB_WORKSPACE/.interop/gpg-bridge/target/release/gpg-bridge"
       - uses: actions/upload-artifact@v4
         with:
           name: openkeychain-remote-signing-debug
@@ -84,9 +104,11 @@ jobs:
           sha256sum OpenKeychain-remote-signing-preview.apk > SHA256SUMS
           tag="remote-signing-preview-${GITHUB_SHA:0:7}"
           cat > notes.md <<'NOTES'
-          Android 7+ Debug preview of embedded Tailscale remote signing.
+          Android 7+ Debug preview of embedded Tailscale remote signing with GnuPG agent forwarding and the gpg-bridge HTTP/Noise protocol.
 
-          Supports software RSA keys and per-request approval on the phone. The APK is built and tested by this workflow, but physical-device and live-tailnet validation remain outstanding. Start with a test key.
+          Supports local software RSA, Ed25519, ECDSA, and DSA keys through gpg-bridge, plus RSA/Ed25519 through GnuPG agent forwarding. Each signature requires approval on the phone. Blank peer selection allows authenticated tailnet nodes permitted by your Tailscale ACLs.
+
+          This APK is built and tested by this workflow; physical-device and live-tailnet validation remain outstanding. Preview signing certificates can differ between builds: keep the existing app and export a verified, protected key backup before migrating to a replacement preview.
 
           This debug app installs alongside upstream OpenKeychain with separate private storage. Download the APK and SHA256SUMS from Assets below.
           NOTES
@@ -94,9 +116,13 @@ jobs:
             "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> notes.md
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --prerelease --latest=false --title "Tailscale remote signing preview (${GITHUB_SHA:0:7})" \
-              --notes-file notes.md OpenKeychain-remote-signing-preview.apk SHA256SUMS
+              --draft --prerelease --latest=false \
+              --title "Tailscale remote signing preview (${GITHUB_SHA:0:7})" --notes-file notes.md
           fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            OpenKeychain-remote-signing-preview.apk SHA256SUMS
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false \
+            --title "Tailscale remote signing preview (${GITHUB_SHA:0:7})" --notes-file notes.md
           {
             printf '### Download APK\n\n'
             printf '[APK](https://github.com/%s/releases/download/%s/OpenKeychain-remote-signing-preview.apk)\n\n' "$GITHUB_REPOSITORY" "$tag"

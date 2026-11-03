@@ -13,14 +13,21 @@ final class SigningApproval {
     final RemoteSigningKey key;
     final int hashAlgorithm;
     final byte[] digest;
+    final String contentPreview;
     final CompletableFuture<char[]> answer = new CompletableFuture<>();
     private final AtomicBoolean claimed = new AtomicBoolean();
 
     SigningApproval(String peer, RemoteSigningKey key, int hashAlgorithm, byte[] digest) {
+        this(peer, key, hashAlgorithm, digest, null);
+    }
+
+    SigningApproval(String peer, RemoteSigningKey key, int hashAlgorithm, byte[] digest,
+            String contentPreview) {
         this.peer = peer;
         this.key = key;
         this.hashAlgorithm = hashAlgorithm;
         this.digest = digest.clone();
+        this.contentPreview = contentPreview;
     }
 
     void approve(char[] password) {

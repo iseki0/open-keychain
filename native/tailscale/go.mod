@@ -3,6 +3,7 @@ module org.sufficientlysecure.keychain/tailagent
 go 1.27.3
 
 require (
+	github.com/flynn/noise v1.1.0
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867
 	tailscale.com v1.104.4
 )

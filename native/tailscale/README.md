@@ -21,9 +21,10 @@ empty, and is never logged by this wrapper. State belongs in the Android app's
 private files directory; the wrapper sets its mode to 0700. Do not store auth keys
 in project files or CI. Changing settings requires closing and recreating a node.
 
-`accept()` blocks until the connection's Tailscale `WhoIs` identity matches an
-explicitly allowlisted stable node ID. An empty allowlist denies all peers.
-Names and IP addresses are display data, not authorization identities. Tailnet
+`accept()` first authenticates the connection with Tailscale `WhoIs`. A blank
+stable-node-ID filter allows all authenticated tailnet nodes. A nonempty list
+restricts access to those exact stable IDs; both Assuan and gpg-bridge use the
+same policy. Names and IP addresses are display data, not authorization identities. Tailnet
 ACLs should additionally restrict the chosen TCP port to the remote workspace.
 Up to four accepted streams are active at once. Each connection exposes
 `getPeerId()`, `getPeerName()`, `readBytes(int)`, `writeBytes(byte[])`, and `close()`.
@@ -34,6 +35,15 @@ thread. Forward ConnectivityManager changes to
 `node.networkChanged(interfaceName, gateway)` so Tailscale updates its default
 route and reconnects after Wi-Fi/cellular transitions. The Assuan protocol, key policy, and per-signature confirmation are owned
 by the Android service, outside this transport module.
+
+`drainLogsJSON()` returns a JSON array of up to 200 diagnostic strings and clears
+the native buffer. Each entry is limited to 1500 UTF-8 bytes. Startup errors keep
+their failing stage and original cause across JNI. Login URL paths, tickets,
+authorization values, auth keys, typed key material, and password/PSK values are
+redacted before entering the buffer. The Android log viewer applies its own
+redaction as well. A Java `proxyerror` class is a generic Go-mobile error wrapper,
+not evidence of an HTTP proxy configuration issue; inspect its message and these
+diagnostics for the actual cause.
 
 ## Android device validation
 

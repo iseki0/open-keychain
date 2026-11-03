@@ -6,6 +6,7 @@ release.properties
 *.apk
 __pycache__/
 *.py[cod]
+.interop/
 
 # Gradle
 .gradle

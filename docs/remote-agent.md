@@ -6,11 +6,19 @@ reserve the phone's system VPN slot. The listener exists inside the embedded
 Tailscale userspace network, on TCP port **17373**; it is not bound to Wi-Fi,
 cellular, localhost, or a public interface.
 
-The first version supports **Android 7.0 / API 24 or later**, **software RSA
-signing keys**, and **SHA-256, SHA-384, and SHA-512**. Existing OpenKeychain keys
+The optional [gpg-bridge v1](https://github.com/iseki0/gpg-bridge) endpoint listens
+on tailnet TCP **17389** and supports the existing, unmodified `gpg-bridge`
+client. It uses HTTP plus `Noise_NKpsk0_25519_ChaChaPoly_BLAKE2s` encryption,
+server authentication and a temporary pre-shared credential. The phone keeps its
+own Tailscale identity; no Android system VPN or separately installed Tailscale
+app is required for either protocol.
+
+This fork supports **Android 7.0 / API 24 or later** and local software **RSA,
+Ed25519, ECDSA and DSA signing keys** through gpg-bridge. Assuan supports RSA and
+Ed25519 with SHA-256, SHA-384 and SHA-512. Existing OpenKeychain keys
 remain in the phone's key storage. Each signature requires an explicit approval
 and key passphrase on the phone, including when the key has no passphrase.
-ECC, hardware-token keys, decryption, private-key export, SSH agent forwarding,
+Hardware-token keys, decryption, private-key export, SSH agent forwarding,
 and unattended approval are outside this version's scope.
 
 ## Download the APK
@@ -57,25 +65,31 @@ and commits. Nordpol and ChipsLayoutManager use their upstream JitPack builds.
 
 ## Pair the phone and the cloud node
 
-1. Import or create an RSA signing key in this fork of OpenKeychain. Export its **public key**
+1. Import or create a local signing key in this fork of OpenKeychain. Export its **public key**
    to the cloud machine. Never send a secret-key export or passphrase there.
 2. In OpenKeychain Settings, open **Tailscale remote signing**. Set a hostname and, if
    needed, an HTTPS Headscale control URL. Leave the control URL empty for
-   Tailscale's hosted service. Select the exact signing-key fingerprints to expose.
+   Tailscale's hosted service. Select individual signing keys or enable **Select
+   all signing keys**. The latter includes valid software signing keys imported
+   later, until you disable the option. Key rows show the algorithm; ECDSA and
+   DSA use gpg-bridge rather than the Assuan endpoint.
 3. Connect and use the displayed login link to enroll the embedded node. It has
    its own node identity, independent of any Tailscale Android app installed on
    the phone. Note the phone's Tailscale IP from the status display.
-4. Put the authorized cloud node's **stable NodeID** in the peer allowlist. This
+4. Enable **Allow all Tailscale nodes**, or leave the node box blank, to accept
+   all authenticated tailnet nodes permitted by your tailnet policy. To restrict
+   access, enter the authorized cloud node's **stable NodeID** instead. This
    is the `ID` value from `tailscale status --json` (`Self.ID` when run on the
    cloud node), not its hostname, Tailscale IP, machine key, or user ID. For a
    managed cloud environment, obtain the sidecar node's ID from the environment
-   operator/Tailscale administration. An empty allowlist denies every connection.
+   operator/Tailscale administration. A nonempty list restricts access to those IDs.
    Reconnect after changing peers or key selections.
-5. Grant that cloud node access to the phone's TCP port 17373 in the tailnet
+5. Grant that cloud node access to the phone's TCP port 17373 for Assuan or
+   17389 for gpg-bridge in the tailnet
    policy. Also allow the phone's login flow and normal Tailscale connectivity.
    Broader pre-existing allow-all rules must be removed if you intend the
-   network policy itself to restrict this port. The application's exact NodeID
-   allowlist still applies independently.
+   network policy itself to restrict this port. A configured application NodeID
+   list applies independently; the app cannot override a restrictive tailnet ACL.
 6. Allow OpenKeychain notifications. Keep its foreground notification enabled
    while signing. If the phone suspends connectivity, check its battery-saving
    restrictions for OpenKeychain. Start and stop remote signing explicitly; it
@@ -93,15 +107,17 @@ An example Tailscale grant (replace the tag assignments with your own) is:
     {
       "src": ["tag:codex-signer"],
       "dst": ["tag:openkeychain"],
-      "ip": ["tcp:17373"]
+      "ip": ["tcp:17373", "tcp:17389"]
     }
   ]
 }
 ```
 
 Assign the source tag only to authorized cloud nodes. App-level authentication
-uses Tailscale `WhoIs` on each accepted connection and checks the stable NodeID;
-merely belonging to the same tailnet does not authorize signing.
+uses Tailscale `WhoIs` on each accepted connection. Blank/all-node mode accepts
+every authenticated tailnet node; otherwise the stable NodeID must match the
+configured list. gpg-bridge additionally requires its temporary Noise credential.
+Every signature still requires local approval in both modes.
 
 The embedded Tailscale node state is stored under the application's private
 `files/tailnet-agent` directory and survives a normal disconnect. Reinstalling
@@ -109,7 +125,55 @@ or clearing application data creates a new identity; revoke the old node in
 Tailscale administration as appropriate. OpenKeychain's existing application
 backup restriction also covers this state.
 
-## Use from CodexCloud
+## Use the gpg-bridge client
+
+After enrolling the phone and selecting its signing keys and allowed cloud
+node policy, tap **Create or view gpg-bridge connection string** in the remote
+signing screen. The node must be signed in and connected. Copy the generated
+`gpgbridge:v1:...` string to the intended cloud task. It is an eight-hour
+credential, kept only in memory on the phone. **Revoke gpg-bridge session**
+invalidates it immediately; disconnecting or stopping OpenKeychain also ends
+the session. Revocation leaves the separate Assuan endpoint available while the
+Tailscale node remains connected.
+
+Install your existing [gpg-bridge Linux client](https://github.com/iseki0/gpg-bridge)
+at a fixed path and run it inside the target repository:
+
+```sh
+/path/to/gpg-bridge connect
+# Paste the phone's connection string when prompted.
+/path/to/gpg-bridge status
+git commit -m 'Signed using the phone'
+git verify-commit HEAD
+git tag -s v1.0 -m 'Signed release'
+git verify-tag v1.0
+/path/to/gpg-bridge disconnect
+```
+
+Open each signing notification on the phone and approve the displayed key,
+SHA-256 digest and Git object preview. The protocol signs the original bytes
+and returns an armored detached OpenPGP signature plus `SIG_CREATED` status.
+The preview escapes control characters and truncates long objects; the
+signature covers all original bytes. Git commit/tag formatting is checked, but
+the phone cannot verify the referenced tree, files or repository ownership.
+Arbitrary-data and unattended signing are not enabled.
+
+The ticket's endpoint is `http://<phone-tailnet-IP>:17389`. Noise encrypts and
+authenticates the payload within HTTP; it does not hide connection metadata.
+The cloud must have a supported route to that tailnet address. In managed
+CodexCloud, configure Tailscale VPN and permit this HTTP destination through the
+supported environment settings, preserving inherited proxy variables. The
+gpg-bridge client honors standard HTTP proxy settings. It does not use the
+Assuan helper's `--http-connect` argument. The selected all-node or explicit
+NodeID policy still applies in addition to the connection-string credential.
+
+The compatibility implementation was tested against the unmodified client from
+commit `60454d9354d02ae7f0288df110026d2aa1de8b59`. See
+[the interoperability harness](../tools/gpg-bridge-integration/README.md) for
+repeatable checks with temporary keys. Physical Android and live-tailnet
+validation remain outstanding.
+
+## Use Assuan from CodexCloud
 
 The Python helper needs Python 3.9+, GnuPG 2.2+, and the phone's literal
 Tailscale IPv4 or IPv6 address. It creates a fresh private `GNUPGHOME` for one
@@ -159,7 +223,7 @@ python3 tools/remote-gpg-agent/remote_agent.py \
          -c user.signingkey=YOUR_SIGNING_FINGERPRINT commit -S -m 'Signed change'
 ```
 
-Replace the example address and fingerprint. Use the exact selected RSA
+Replace the example address and fingerprint. Use the exact selected RSA or Ed25519
 signing-key/subkey fingerprint; a `!` suffix can force a particular subkey in
 GnuPG when necessary. The disposable home disappears when the command ends,
 so this helper does not retain trustdb changes, imported keys, or agent sockets.
@@ -215,6 +279,39 @@ expires while waiting, retry the command and approve the new request. The
 implementation fails closed for unsupported keys and agent commands. Public
 key metadata for the phone-selected keys can be read by an authorized peer;
 private key export and decryption are unavailable.
+
+## Technical diagnostics and Android 17
+
+Tap **View diagnostic log** to use OpenKeychain's existing operation log viewer.
+It includes startup phases, the original native error/cause chain and stack
+frames, Android release/API/build/model, default interface/gateway changes,
+Tailscale state and bounded native logs, key inventory and selection reasons,
+and signature/session outcomes. The existing viewer supports its usual log
+inspection and user-initiated sharing. **Clear diagnostic log** clears the
+memory-only buffer; it is not written to disk by this feature. Connection
+strings, passwords, authorization values, private-key material and login URLs
+are redacted before storage.
+
+`Connection failed: proxyerror` in the earlier preview showed only gomobile's
+generic Java error wrapper. It does not identify an HTTP proxy failure, and an
+empty node box does not affect Tailscale startup. The updated screen shows the
+native error text, and the log identifies which startup operation failed. If
+the node fails before obtaining an AuthURL, the Tailscale sign-in button remains
+disabled. For Android 17 build `CP3A.260905.009`, the actual startup failure must
+be diagnosed from those new details; it has not been reproduced on a physical
+device in this development environment.
+
+If the key list is empty, check the log's package ID and local public/secret-key
+inventory. The debug preview has separate private storage from upstream
+OpenKeychain. Encryption-only keys cannot sign; revoked/expired keys, missing
+private material and hardware-token-only records are identified in the inventory
+rather than treated as available software signers.
+
+Each CI preview currently uses that runner's generated debug signing key. A new
+preview can therefore have a different Android signing certificate and cannot
+overwrite an earlier preview. Before migrating, back up any keys in the existing
+preview locally on the phone; do not uninstall an app containing your only key
+copy. A persistent signing keystore is needed for a stable upgrade channel.
 
 ## Verification
 

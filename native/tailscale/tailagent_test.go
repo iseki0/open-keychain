@@ -4,9 +4,12 @@ package tailagent
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,6 +42,62 @@ func TestNodeValidation(t *testing.T) {
 	}
 	if err := n.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPeerPolicyBlankAllowsAllAuthenticatedNodes(t *testing.T) {
+	for _, allowed := range []string{"", " ", " , , "} {
+		n, err := NewNode(t.TempDir(), "openkeychain", "", "", 9476, allowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !n.allowAll || !n.allowsPeer("n123") || !n.allowsPeer("any-other-tailnet-node") {
+			t.Fatal("blank node filter did not allow all authenticated nodes")
+		}
+		if n.allowsPeer("") {
+			t.Fatal("blank authenticated identity accepted")
+		}
+		if err := n.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := NewNode(t.TempDir(), "openkeychain", "", "", 9476, "n123, n456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	if n.allowAll || !n.allowsPeer("n123") || !n.allowsPeer("n456") || n.allowsPeer("n789") || n.allowsPeer("") {
+		t.Fatal("explicit node filter was not enforced")
+	}
+}
+
+func TestStartErrorsPreserveStageAndCause(t *testing.T) {
+	n, err := NewNode(t.TempDir(), "openkeychain", "", "", 9476, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	// Force a local, deterministic failure before tsnet creates an engine or
+	// contacts the network. The blank peer filter is unrelated to this failure.
+	badDirectory := filepath.Join(t.TempDir(), "regular-file")
+	if err := os.WriteFile(badDirectory, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	n.server.Dir = badDirectory
+	err = n.Start()
+	if err == nil || !strings.Contains(err.Error(), "start embedded Tailscale:") {
+		t.Fatalf("startup error lost stage: %v", err)
+	}
+	var cause *os.PathError
+	if !errors.As(err, &cause) {
+		t.Fatalf("startup error lost original cause: %v", err)
+	}
+	if repeated := n.Start(); repeated != err {
+		t.Fatal("repeated Start lost original failure")
+	}
+	logs, logErr := n.DrainLogsJSON()
+	if logErr != nil || !strings.Contains(logs, "start embedded Tailscale:") {
+		t.Fatal("startup failure absent from diagnostics")
 	}
 }
 

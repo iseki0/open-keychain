@@ -41,6 +41,12 @@ public final class RemoteSignApprovalActivity extends Activity {
                 request.key.userId, request.key.fingerprint, request.digestHex(), request.hashName()));
         details.setTextIsSelectable(true);
         content.addView(details);
+        if (request.contentPreview != null) {
+            TextView original = new TextView(this);
+            original.setText(getString(R.string.remote_bridge_content, request.contentPreview));
+            original.setTextIsSelectable(true);
+            content.addView(original);
+        }
         password = new EditText(this);
         password.setHint(R.string.remote_agent_key_password);
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);

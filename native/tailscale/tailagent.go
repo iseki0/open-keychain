@@ -30,11 +30,16 @@ const maxConnections = 4
 // Node owns an independent Tailscale identity. Close it when the Android service stops.
 // All exported operations return errors rather than allowing a panic across JNI.
 type Node struct {
+	bridgeMu sync.Mutex
+	bridge   *bridgeServer
 	mu       sync.Mutex
 	server   *tsnet.Server
 	listener net.Listener
 	client   *local.Client
 	allowed  map[string]bool
+	allowAll bool
+	logMu    sync.Mutex
+	logs     []string
 	conns    map[*Connection]struct{}
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -46,7 +51,7 @@ type Node struct {
 
 // NewNode creates a node without starting network activity. allowedPeerIdsCsv is
 // a comma-separated list of stable Tailscale node IDs, not names or IP addresses.
-// An empty list denies every connection, allowing login before peers are paired.
+// An empty list allows every authenticated tailnet node, subject to tailnet ACLs.
 // authKey may be empty to use Tailscale's browser login. The key is never logged.
 func NewNode(stateDir, hostname, controlURL, authKey string, port int32, allowedPeerIdsCsv string) (node *Node, err error) {
 	defer recoverError(&err)
@@ -77,17 +82,28 @@ func NewNode(stateDir, hostname, controlURL, authKey string, port int32, allowed
 		allowed[id] = true
 	}
 	if e := os.MkdirAll(stateDir, 0700); e != nil {
-		return nil, e
+		return nil, fmt.Errorf("create Tailscale state directory: %w", e)
 	}
 	if e := os.Chmod(stateDir, 0700); e != nil {
-		return nil, e
+		return nil, fmt.Errorf("protect Tailscale state directory: %w", e)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	discard := func(string, ...any) {}
-	return &Node{
-		server:  &tsnet.Server{Dir: stateDir, Hostname: hostname, ControlURL: controlURL, AuthKey: authKey, Logf: discard, UserLogf: discard},
-		allowed: allowed, conns: make(map[*Connection]struct{}), ctx: ctx, cancel: cancel, port: port,
-	}, nil
+	n := &Node{allowed: allowed, allowAll: len(allowed) == 0,
+		conns: make(map[*Connection]struct{}), ctx: ctx, cancel: cancel, port: port}
+	n.server = &tsnet.Server{Dir: stateDir, Hostname: hostname, ControlURL: controlURL,
+		AuthKey: authKey, Logf: n.logf, UserLogf: n.logf}
+	if n.allowAll {
+		n.logf("Peer access policy: all authenticated tailnet nodes")
+	} else {
+		n.logf("Peer access policy: %d selected stable node IDs", len(allowed))
+	}
+	return n, nil
+}
+
+// allowsPeer is shared by both network protocols. WhoIs must have established
+// this nonempty stable identity before applying the optional app-level filter.
+func (n *Node) allowsPeer(id string) bool {
+	return id != "" && (n.allowAll || n.allowed[id])
 }
 
 // Start initializes the listener and returns before interactive login completes.
@@ -103,16 +119,28 @@ func (n *Node) Start() (err error) {
 		return n.startErr
 	}
 	n.started = true
+	n.logf("Starting embedded Tailscale")
 	if err = n.server.Start(); err != nil {
-		n.startErr = err
-		return err
+		n.startErr = fmt.Errorf("start embedded Tailscale: %w", err)
+		n.logf("%v", n.startErr)
+		return n.startErr
 	}
+	n.logf("Tailscale backend initialized; creating local API client")
 	n.client, err = n.server.LocalClient()
-	if err == nil {
-		n.listener, err = n.server.Listen("tcp", ":"+strconv.Itoa(int(n.port)))
+	if err != nil {
+		n.startErr = fmt.Errorf("create Tailscale local API client: %w", err)
+		n.logf("%v", n.startErr)
+		return n.startErr
 	}
-	n.startErr = err
-	return err
+	n.logf("Creating tailnet Assuan listener on port %d", n.port)
+	n.listener, err = n.server.Listen("tcp", ":"+strconv.Itoa(int(n.port)))
+	if err != nil {
+		n.startErr = fmt.Errorf("create tailnet Assuan listener: %w", err)
+		n.logf("%v", n.startErr)
+		return n.startErr
+	}
+	n.logf("Embedded Tailscale initialized; waiting for login or incoming connections")
+	return nil
 }
 
 // StatusJSON returns Tailscale's status, including BackendState, AuthURL,
@@ -159,8 +187,8 @@ func (n *Node) NetworkChanged(interfaceName, gateway string) (err error) {
 	return nil
 }
 
-// Accept blocks until an authenticated, explicitly allowlisted peer connects.
-// Nonallowlisted peers are closed before their bytes can reach the agent.
+// Accept blocks until an authenticated peer allowed by the optional node filter connects.
+// Peers outside a nonempty filter are closed before their bytes reach the agent.
 // The tailnet's ACLs also apply. A maximum of four active connections is allowed.
 func (n *Node) Accept() (connection *Connection, err error) {
 	defer recoverError(&err)
@@ -192,7 +220,7 @@ func (n *Node) Accept() (connection *Connection, err error) {
 			conn.Close()
 			return nil, net.ErrClosed
 		}
-		if id == "" || !n.allowed[id] || len(n.conns) >= maxConnections {
+		if !n.allowsPeer(id) || len(n.conns) >= maxConnections {
 			n.mu.Unlock()
 			conn.Close()
 			continue
@@ -222,6 +250,7 @@ func (n *Node) Close() (err error) {
 	}
 	started := n.started
 	n.mu.Unlock()
+	n.StopBridge()
 	if listener != nil {
 		listener.Close()
 	}

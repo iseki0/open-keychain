@@ -6,18 +6,23 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PersistableBundle;
 import android.text.InputType;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.view.WindowManager;
 import androidx.core.app.NotificationManagerCompat;
 import java.util.HashSet;
 import java.util.List;
@@ -30,8 +35,11 @@ import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningRepositor
 public final class RemoteAgentActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private EditText hostname, control, peers;
+    private CheckBox allNodes, allKeys;
     private TextView status;
     private Button login;
+    private Button bridgePair;
+    private TextView bridgeStatus;
     private String loginURL;
     private final Runnable refresh = new Runnable() {
         @Override public void run() { refreshStatus(); handler.postDelayed(this, 2000); }
@@ -39,6 +47,7 @@ public final class RemoteAgentActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         setTitle(R.string.remote_agent_title);
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -54,6 +63,30 @@ public final class RemoteAgentActivity extends Activity {
         hostname = field(content, R.string.remote_agent_hostname, settings.getString("hostname", "openkeychain"));
         control = field(content, R.string.remote_agent_control, settings.getString("control", ""));
         peers = field(content, R.string.remote_agent_peers, settings.getString("peers", ""));
+        allNodes = new CheckBox(this);
+        allNodes.setText(R.string.remote_agent_all_nodes);
+        allNodes.setChecked(peers.getText().toString().trim().isEmpty());
+        peers.setEnabled(!allNodes.isChecked());
+        allNodes.setOnCheckedChangeListener((button, checked) -> {
+            peers.setEnabled(!checked);
+            if (RemoteAgentService.isRunning()) {
+                stopService(new Intent(this, RemoteAgentService.class));
+                message(R.string.remote_agent_reconnect);
+            }
+        });
+        content.addView(allNodes);
+        allKeys = new CheckBox(this);
+        allKeys.setText(R.string.remote_agent_all_keys);
+        allKeys.setChecked(RemoteAgentConfig.allKeys(this));
+        allKeys.setOnCheckedChangeListener((button, checked) -> {
+            if (RemoteAgentConfig.allKeys(this) == checked) return;
+            settings.edit().putBoolean("all_keys", checked).apply();
+            if (RemoteAgentService.isRunning()) {
+                stopService(new Intent(this, RemoteAgentService.class));
+                message(R.string.remote_agent_reconnect);
+            }
+        });
+        content.addView(allKeys);
         button(content, R.string.remote_agent_choose_keys, this::chooseKeys);
         button(content, R.string.remote_agent_connect, this::connect);
         button(content, R.string.remote_agent_disconnect,
@@ -62,9 +95,15 @@ public final class RemoteAgentActivity extends Activity {
             if (loginURL != null) startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(loginURL)));
         });
         login.setEnabled(false);
+        bridgePair = button(content, R.string.remote_bridge_pair, this::pairBridge);
+        button(content, R.string.remote_bridge_revoke, RemoteAgentService::revokeBridge);
+        bridgeStatus = new TextView(this);
+        content.addView(bridgeStatus);
         status = new TextView(this);
         status.setTextIsSelectable(true);
         content.addView(status);
+        button(content, R.string.remote_agent_view_log, () -> RemoteAgentDiagnostics.open(this));
+        button(content, R.string.remote_agent_clear_log, RemoteAgentDiagnostics::clear);
     }
 
     private EditText field(LinearLayout parent, int hint, String value) {
@@ -90,16 +129,34 @@ public final class RemoteAgentActivity extends Activity {
     private void chooseKeys() {
         new Thread(() -> {
             try {
-                List<RemoteSigningKey> keys = new RemoteSigningRepository(this).listAvailableKeys();
+                org.sufficientlysecure.keychain.daos.KeyRepository inventory =
+                        org.sufficientlysecure.keychain.daos.KeyRepository.create(this);
+                RemoteAgentDiagnostics.info("Local key inventory: package=" + getPackageName()
+                        + ", public identities=" + inventory.getAllUnifiedKeyInfo().size()
+                        + ", identities with secret material=" + inventory.getAllUnifiedKeyInfoWithSecret().size());
+                RemoteSigningRepository repository = new RemoteSigningRepository(this);
+                List<RemoteSigningKey> keys = repository.listAvailableKeys();
+                int lines = 0;
+                for (String line : repository.diagnosticInventory()) {
+                    if (lines++ >= 48) { RemoteAgentDiagnostics.info("Additional key inventory rows omitted"); break; }
+                    RemoteAgentDiagnostics.info(line);
+                }
+                RemoteAgentDiagnostics.info("Key selection: package=" + getPackageName()
+                        + ", available signing keys=" + keys.size());
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     if (keys.isEmpty()) { message(R.string.remote_agent_no_keys); return; }
                     Set<String> selected = new HashSet<>(RemoteAgentConfig.fingerprints(this));
+                    if (RemoteAgentConfig.allKeys(this)) {
+                        for (RemoteSigningKey key : keys) selected.add(key.fingerprint);
+                    }
                     CharSequence[] labels = new CharSequence[keys.size()];
                     boolean[] checked = new boolean[keys.size()];
                     for (int i = 0; i < keys.size(); i++) {
                         RemoteSigningKey key = keys.get(i);
-                        labels[i] = key.userId + "\n" + key.fingerprint;
+                        labels[i] = key.userId + "\n" + key.algorithmName
+                                + (key.keygrip == null ? " · " + getString(R.string.remote_agent_bridge_only) : "")
+                                + "\n" + key.fingerprint;
                         checked[i] = selected.contains(key.fingerprint);
                     }
                     new AlertDialog.Builder(this).setTitle(R.string.remote_agent_choose_keys)
@@ -107,13 +164,22 @@ public final class RemoteAgentActivity extends Activity {
                                 String fingerprint = keys.get(position).fingerprint;
                                 if (enabled) selected.add(fingerprint); else selected.remove(fingerprint);
                             }).setPositiveButton(android.R.string.ok, (dialog, which) -> {
-                                RemoteAgentConfig.preferences(this).edit().putStringSet("fingerprints", selected).apply();
+                                RemoteAgentConfig.preferences(this).edit().putStringSet("fingerprints", selected)
+                                        .putBoolean("all_keys", false).apply();
+                                allKeys.setChecked(false);
                                 // Reconnect explicitly so revoked selections take effect immediately.
-                                stopService(new Intent(this, RemoteAgentService.class));
-                                message(R.string.remote_agent_reconnect);
-                            }).setNegativeButton(android.R.string.cancel, null).show();
+                                if (RemoteAgentService.isRunning()) {
+                                    stopService(new Intent(this, RemoteAgentService.class));
+                                    message(R.string.remote_agent_reconnect);
+                                }
+                            }).setNeutralButton(R.string.remote_agent_all_keys, (dialog, which) ->
+                                    allKeys.setChecked(true))
+                            .setNegativeButton(android.R.string.cancel, null).show();
                 });
-            } catch (Exception e) { runOnUiThread(() -> message(R.string.remote_agent_no_keys)); }
+            } catch (Exception e) {
+                RemoteAgentDiagnostics.error("Reading local signing keys failed", e);
+                runOnUiThread(() -> message(R.string.remote_agent_no_keys));
+            }
         }, "signing-key-list").start();
     }
 
@@ -121,7 +187,8 @@ public final class RemoteAgentActivity extends Activity {
         if (RemoteAgentService.isRunning()) { message(R.string.remote_agent_reconnect); return; }
         String hostValue = hostname.getText().toString().trim();
         String controlValue = control.getText().toString().trim();
-        String peersValue = peers.getText().toString().trim();
+        String peersValue = allNodes.isChecked() ? "" : peers.getText().toString().trim();
+        if (peersValue.isEmpty()) allNodes.setChecked(true);
         if (!hostValue.matches("[a-zA-Z0-9][a-zA-Z0-9-]{0,62}")) {
             hostname.setError(getString(R.string.remote_agent_invalid_hostname)); return;
         }
@@ -160,6 +227,51 @@ public final class RemoteAgentActivity extends Activity {
                 loginURL = auth;
         } catch (Exception ignored) {}
         login.setEnabled(loginURL != null);
+        long expiry = RemoteAgentService.bridgeExpiry();
+        if (expiry > System.currentTimeMillis() / 1000) {
+            bridgeStatus.setText(getString(R.string.remote_bridge_active,
+                    java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(expiry * 1000))));
+        } else bridgeStatus.setText(R.string.remote_bridge_inactive);
+    }
+
+    private void pairBridge() {
+        if (!RemoteAgentService.isRunning()) { message(R.string.remote_bridge_create_failed); return; }
+        bridgePair.setEnabled(false);
+        RemoteAgentService.createBridgeTicket((ticket, error) -> runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            bridgePair.setEnabled(true);
+            if (ticket == null) {
+                Toast.makeText(this, error == null ? getString(R.string.remote_bridge_create_failed) : error,
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (!RemoteAgentService.isCurrentBridgeTicket(ticket)) {
+                message(R.string.remote_bridge_inactive);
+                return;
+            }
+            TextView text = new TextView(this);
+            int padding = (int) (20 * getResources().getDisplayMetrics().density);
+            text.setPadding(padding, padding, padding, padding);
+            text.setText(getString(R.string.remote_bridge_ticket_details) + "\n\n" + ticket);
+            text.setTextIsSelectable(true);
+            ScrollView scroll = new ScrollView(this);
+            scroll.addView(text);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle(R.string.remote_bridge_pair)
+                    .setView(scroll).setPositiveButton(R.string.remote_bridge_copy, (window, which) -> {
+                        if (!RemoteAgentService.isCurrentBridgeTicket(ticket)) {
+                            message(R.string.remote_bridge_inactive);
+                            return;
+                        }
+                        ClipData clip = ClipData.newPlainText("gpg-bridge pairing", ticket);
+                        PersistableBundle extras = new PersistableBundle();
+                        extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
+                        clip.getDescription().setExtras(extras);
+                        getSystemService(ClipboardManager.class).setPrimaryClip(clip);
+                    }).setNegativeButton(android.R.string.cancel, null).create();
+            dialog.setOnDismissListener(window -> text.setText(""));
+            dialog.show();
+            dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        }));
     }
 
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grants) {
