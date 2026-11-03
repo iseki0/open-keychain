@@ -133,8 +133,8 @@ func (n *Node) StartBridge(backend BridgeBackend, ttlSeconds int64) (ticket stri
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	status, err := client.Status(statusCtx)
-	if err != nil || status.BackendState != "Running" || len(status.TailscaleIPs) == 0 {
+	status, err := client.StatusWithoutPeers(statusCtx)
+	if err != nil || status == nil || status.BackendState != "Running" || len(status.TailscaleIPs) == 0 {
 		return "", errors.New("sign in to Tailscale before starting gpg-bridge")
 	}
 	endpoint := "http://" + net.JoinHostPort(status.TailscaleIPs[0].String(), "17389")

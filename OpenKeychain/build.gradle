@@ -114,6 +114,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    testOptions.unitTests.includeAndroidResources = true
     testOptions.unitTests.all {
         // log results of tests to console, useful for travis
         testLogging {

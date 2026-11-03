@@ -27,6 +27,9 @@
     <string name="remote_agent_notifications_required">Enable notifications to approve signing requests.</string>
     <string name="remote_agent_view_log">View diagnostic log</string>
     <string name="remote_agent_clear_log">Clear diagnostic log</string>
+    <string name="remote_agent_status_summary">Tailscale: %1$s\nIP: %2$s</string>
+    <string name="remote_agent_status_no_address">Not assigned yet</string>
+    <string name="remote_agent_status_health">Health: %1$s</string>
     <string name="remote_bridge_pair">Create or view gpg-bridge connection string</string>
     <string name="remote_bridge_revoke">Revoke gpg-bridge session</string>
     <string name="remote_bridge_copy">Copy connection string</string>

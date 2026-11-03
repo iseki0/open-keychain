@@ -15,7 +15,11 @@ arm64-v8a, armeabi-v7a, and x86_64 for Android API 24+. The generated
 Run `go test -race ./...` from this directory to check the transport adapters.
 
 `Tailagent.newNode(stateDir, hostname, controlURL, authKey, port, allowedPeerIdsCsv)`
-creates a node. Call `start()` once and poll `statusJSON()` in a background task.
+creates a node. Call `start()` once and poll `statusSummaryJSON()` in a background task.
+Both `statusSummaryJSON()` and the compatible `statusJSON()` return a bounded
+16 KiB summary with only backend state, login URL, local IPs, and health warnings.
+They request status without peers; large peer graphs, profiles, and endpoint lists
+are excluded before serialization. Java parses this snapshot off the UI thread.
 Tailscale's `AuthURL` is the interactive browser-login link. The auth key may be
 empty, and is never logged by this wrapper. State belongs in the Android app's
 private files directory; the wrapper sets its mode to 0700. Do not store auth keys

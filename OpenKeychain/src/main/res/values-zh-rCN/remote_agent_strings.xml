@@ -27,6 +27,9 @@
     <string name="remote_agent_notifications_required">请启用通知以确认签名请求。</string>
     <string name="remote_agent_view_log">查看诊断日志</string>
     <string name="remote_agent_clear_log">清空诊断日志</string>
+    <string name="remote_agent_status_summary">Tailscale 状态：%1$s\nIP：%2$s</string>
+    <string name="remote_agent_status_no_address">尚未分配</string>
+    <string name="remote_agent_status_health">健康状态：%1$s</string>
     <string name="remote_bridge_pair">创建或查看 gpg-bridge 连接串</string>
     <string name="remote_bridge_revoke">撤销 gpg-bridge 会话</string>
     <string name="remote_bridge_copy">复制连接串</string>

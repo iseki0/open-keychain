@@ -282,6 +282,21 @@ private key export and decryption are unavailable.
 
 ## Technical diagnostics and Android 17
 
+The main screen displays a small status summary rather than raw status JSON.
+The service fetches Tailscale status without the peer graph, projects only
+backend state, login URL, local tailnet IPs and health warnings, and bounds the
+native JSON to 16 KiB. Java rejects oversized or excessively nested input before
+parsing it on the service worker. The UI reads an immutable snapshot, limits
+status text to 1536 characters and 12 lines, and redraws only changed values.
+No JSON parsing or native status call runs on the UI thread. IP and health lists
+are capped; overlong display fields are marked with an ellipsis. Oversized login
+URLs are discarded rather than cut into a different credential.
+
+Diagnostic controls are at the top of the screen. Opening the log records the
+current bounded status summary on demand; the full peer JSON is neither rendered
+nor retained in the polling path. Detailed startup and error events remain in
+the existing bounded log viewer.
+
 Tap **View diagnostic log** to use OpenKeychain's existing operation log viewer.
 It includes startup phases, the original native error/cause chain and stack
 frames, Android release/API/build/model, default interface/gateway changes,

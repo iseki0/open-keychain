@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PersistableBundle;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -27,7 +28,6 @@ import androidx.core.app.NotificationManagerCompat;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import org.json.JSONObject;
 import org.sufficientlysecure.keychain.R;
 import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningKey;
 import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningRepository;
@@ -41,6 +41,8 @@ public final class RemoteAgentActivity extends Activity {
     private Button bridgePair;
     private TextView bridgeStatus;
     private String loginURL;
+    private RemoteAgentStatus shownStatus;
+    private long shownBridgeExpiry = Long.MIN_VALUE;
     private final Runnable refresh = new Runnable() {
         @Override public void run() { refreshStatus(); handler.postDelayed(this, 2000); }
     };
@@ -59,6 +61,13 @@ public final class RemoteAgentActivity extends Activity {
         TextView explanation = new TextView(this);
         explanation.setText(R.string.remote_agent_explanation);
         content.addView(explanation);
+        status = new TextView(this);
+        status.setMaxLines(12);
+        status.setEllipsize(TextUtils.TruncateAt.END);
+        status.setTextIsSelectable(true);
+        content.addView(status);
+        button(content, R.string.remote_agent_view_log, this::openDiagnosticLog);
+        button(content, R.string.remote_agent_clear_log, RemoteAgentDiagnostics::clear);
         SharedPreferences settings = RemoteAgentConfig.preferences(this);
         hostname = field(content, R.string.remote_agent_hostname, settings.getString("hostname", "openkeychain"));
         control = field(content, R.string.remote_agent_control, settings.getString("control", ""));
@@ -99,11 +108,6 @@ public final class RemoteAgentActivity extends Activity {
         button(content, R.string.remote_bridge_revoke, RemoteAgentService::revokeBridge);
         bridgeStatus = new TextView(this);
         content.addView(bridgeStatus);
-        status = new TextView(this);
-        status.setTextIsSelectable(true);
-        content.addView(status);
-        button(content, R.string.remote_agent_view_log, () -> RemoteAgentDiagnostics.open(this));
-        button(content, R.string.remote_agent_clear_log, RemoteAgentDiagnostics::clear);
     }
 
     private EditText field(LinearLayout parent, int hint, String value) {
@@ -217,21 +221,42 @@ public final class RemoteAgentActivity extends Activity {
     }
 
     private void refreshStatus() {
-        String value = RemoteAgentService.status();
-        status.setText(value);
-        loginURL = null;
-        try {
-            String auth = new JSONObject(value).optString("AuthURL");
-            Uri uri = Uri.parse(auth);
-            if ("https".equals(uri.getScheme()) && uri.getHost() != null && uri.getUserInfo() == null)
-                loginURL = auth;
-        } catch (Exception ignored) {}
-        login.setEnabled(loginURL != null);
+        RemoteAgentStatus snapshot = RemoteAgentService.status();
+        if (snapshot != shownStatus) {
+            shownStatus = snapshot;
+            String text = statusText(snapshot);
+            if (!TextUtils.equals(status.getText(), text)) status.setText(text);
+            loginURL = snapshot.loginUrl;
+            boolean canLogin = loginURL != null;
+            if (login.isEnabled() != canLogin) login.setEnabled(canLogin);
+        }
         long expiry = RemoteAgentService.bridgeExpiry();
-        if (expiry > System.currentTimeMillis() / 1000) {
-            bridgeStatus.setText(getString(R.string.remote_bridge_active,
-                    java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(expiry * 1000))));
-        } else bridgeStatus.setText(R.string.remote_bridge_inactive);
+        long visibleExpiry = expiry > System.currentTimeMillis() / 1000 ? expiry : 0;
+        if (visibleExpiry != shownBridgeExpiry) {
+            shownBridgeExpiry = visibleExpiry;
+            if (visibleExpiry > 0) {
+                bridgeStatus.setText(getString(R.string.remote_bridge_active,
+                        java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(visibleExpiry * 1000))));
+            } else bridgeStatus.setText(R.string.remote_bridge_inactive);
+        }
+    }
+
+    private String statusText(RemoteAgentStatus snapshot) {
+        String text;
+        if (snapshot.message != null) text = snapshot.message;
+        else {
+            text = getString(R.string.remote_agent_status_summary, snapshot.backendState,
+                    snapshot.addresses.isEmpty() ? getString(R.string.remote_agent_status_no_address) : snapshot.addresses);
+            if (!snapshot.health.isEmpty()) text += "\n" + getString(R.string.remote_agent_status_health, snapshot.health);
+        }
+        // Keep this bound even if translated labels change or malformed state reaches this view.
+        return text.length() <= 1536 ? text : text.substring(0, 1535) + "…";
+    }
+
+    private void openDiagnosticLog() {
+        RemoteAgentStatus snapshot = RemoteAgentService.status();
+        RemoteAgentDiagnostics.info("Tailscale status snapshot: " + statusText(snapshot));
+        RemoteAgentDiagnostics.open(this);
     }
 
     private void pairBridge() {
@@ -283,6 +308,6 @@ public final class RemoteAgentActivity extends Activity {
     }
 
     private void message(int resource) { Toast.makeText(this, resource, Toast.LENGTH_LONG).show(); }
-    @Override protected void onResume() { super.onResume(); handler.post(refresh); }
+    @Override protected void onResume() { super.onResume(); handler.removeCallbacks(refresh); handler.post(refresh); }
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
 }

@@ -7,7 +7,6 @@ package tailagent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -159,29 +158,6 @@ func (n *Node) startServer() error {
 	}
 	n.logf("Tailscale internal log directory: %s", logDir)
 	return n.server.Start()
-}
-
-// StatusJSON returns Tailscale's status, including BackendState, AuthURL,
-// TailscaleIPs, and peer stable IDs. It is safe to call from a background poller.
-func (n *Node) StatusJSON() (result string, err error) {
-	defer recoverError(&err)
-	n.mu.Lock()
-	client, ctx, closed := n.client, n.ctx, n.closed
-	n.mu.Unlock()
-	if closed {
-		return "", net.ErrClosed
-	}
-	if client == nil {
-		return "", errors.New("node has not started")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	status, err := client.Status(ctx)
-	if err != nil {
-		return "", err
-	}
-	data, err := json.Marshal(status)
-	return string(data), err
 }
 
 // NetworkChanged refreshes the Android route cache and wakes Tailscale's

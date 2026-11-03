@@ -53,7 +53,7 @@ public final class RemoteAgentService extends Service {
     private static final AtomicInteger notificationIds = new AtomicInteger(18000);
     private static final ConcurrentHashMap<String, SigningApproval> approvals = new ConcurrentHashMap<>();
     private static volatile RemoteAgentService active;
-    static volatile String lastStatus = "Disconnected";
+    private static volatile RemoteAgentStatus currentStatus = RemoteAgentStatus.initial();
     private final ExecutorService workers = Executors.newCachedThreadPool();
     private final ScheduledExecutorService statusPoller = Executors.newSingleThreadScheduledExecutor();
     private final ExecutorService bridgeControl = Executors.newSingleThreadExecutor();
@@ -233,9 +233,13 @@ public final class RemoteAgentService extends Service {
         return output.toString();
     }
 
-    static String status() {
-        // The UI only reads a snapshot; native LocalClient calls must not block the main thread.
-        return lastStatus;
+    static RemoteAgentStatus status() {
+        // JSON parsing and native calls belong to the worker. The UI reads bounded fields only.
+        return currentStatus;
+    }
+
+    private static void publishStatus(RemoteAgentStatus next) {
+        if (!next.equals(currentStatus)) currentStatus = next;
     }
 
     @Override public void onCreate() {
@@ -278,7 +282,7 @@ public final class RemoteAgentService extends Service {
                 new Intent(this, RemoteAgentActivity.class), SERVICE_NOTIFICATION).setOngoing(true).build());
         if (!started) {
             started = true;
-            lastStatus = "Connecting";
+            publishStatus(RemoteAgentStatus.message("Connecting"));
             workers.execute(this::listen);
         }
         return START_NOT_STICKY;
@@ -307,18 +311,24 @@ public final class RemoteAgentService extends Service {
             statusPoller.scheduleWithFixedDelay(() -> {
                 try {
                     drainNativeLogs();
-                    String status = created.statusJSON();
-                    if (!stopping && active == this) lastStatus = status;
-                    JSONObject state = new JSONObject(status);
-                    String backend = state.optString("BackendState");
+                    RemoteAgentStatus state = RemoteAgentStatus.parse(created.statusSummaryJSON());
+                    synchronized (RemoteAgentService.this) {
+                        if (stopping || active != RemoteAgentService.this) return;
+                        publishStatus(state);
+                    }
+                    String backend = state.backendState;
                     if (!backend.equals(lastBackendState)) {
                         lastBackendState = backend;
                         RemoteAgentDiagnostics.info("Tailscale state=" + backend
-                                + ", login URL available=" + !state.optString("AuthURL").isEmpty());
+                                + ", login URL available=" + (state.loginUrl != null));
                     }
                     lastStatusFailure = "";
                 } catch (Exception failure) {
                     String summary = RemoteAgentDiagnostics.failure(failure);
+                    synchronized (RemoteAgentService.this) {
+                        if (stopping || active != RemoteAgentService.this) return;
+                        publishStatus(RemoteAgentStatus.failure("Status unavailable: " + summary));
+                    }
                     if (!stopping && !summary.equals(lastStatusFailure)) {
                         lastStatusFailure = summary;
                         RemoteAgentDiagnostics.error("Reading Tailscale status failed", failure);
@@ -336,7 +346,7 @@ public final class RemoteAgentService extends Service {
             if (!stopping) {
                 drainNativeLogs();
                 RemoteAgentDiagnostics.error("Starting embedded Tailscale failed", failure);
-                lastStatus = "Connection failed: " + RemoteAgentDiagnostics.failure(failure);
+                publishStatus(RemoteAgentStatus.failure("Connection failed: " + RemoteAgentDiagnostics.failure(failure)));
                 stopSelf();
             }
         }
@@ -518,7 +528,7 @@ public final class RemoteAgentService extends Service {
         }
         statusPoller.shutdownNow();
         for (SigningApproval approval : approvals.values()) approval.deny();
-        if (active == this && !lastStatus.startsWith("Connection failed:")) lastStatus = "Disconnecting";
+        if (active == this && !currentStatus.failed) publishStatus(RemoteAgentStatus.message("Disconnecting"));
         // tsnet shutdown can wait for Go goroutines and sockets. Keep it off Android's main
         // thread and retain the active marker until the node has released its state directory.
         new Thread(() -> {
@@ -533,7 +543,7 @@ public final class RemoteAgentService extends Service {
                 awaitTermination(statusPoller);
                 awaitTermination(bridgeControl);
                 if (active == this) {
-                    if (!lastStatus.startsWith("Connection failed:")) lastStatus = "Disconnected";
+                    if (!currentStatus.failed) publishStatus(RemoteAgentStatus.initial());
                     active = null;
                     RemoteAgentDiagnostics.info("Remote signing stopped");
                 }
