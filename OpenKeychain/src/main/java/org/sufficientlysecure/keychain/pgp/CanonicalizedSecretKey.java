@@ -19,13 +19,17 @@ package org.sufficientlysecure.keychain.pgp;
 
 
 import java.nio.ByteBuffer;
+import java.io.IOException;
 import java.security.PrivateKey;
+import java.security.GeneralSecurityException;
 import java.security.interfaces.ECPrivateKey;
 import java.security.interfaces.RSAPrivateCrtKey;
 import java.util.Date;
+import java.util.Collections;
 import java.util.Map;
 
 import org.bouncycastle.bcpg.PublicKeyAlgorithmTags;
+import org.bouncycastle.bcpg.HashAlgorithmTags;
 import org.bouncycastle.bcpg.S2K;
 import org.bouncycastle.bcpg.SymmetricKeyAlgorithmTags;
 import org.bouncycastle.openpgp.AuthenticationSignatureGenerator;
@@ -50,6 +54,10 @@ import org.sufficientlysecure.keychain.pgp.exception.PgpGeneralException;
 import org.sufficientlysecure.keychain.daos.KeyWritableRepository;
 import org.sufficientlysecure.keychain.service.input.CryptoInputParcel;
 import org.sufficientlysecure.keychain.util.Passphrase;
+import org.sufficientlysecure.keychain.remoteagent.crypto.RsaAgentCrypto;
+import org.sufficientlysecure.keychain.remoteagent.crypto.Ed25519AgentCrypto;
+import org.sufficientlysecure.keychain.remoteagent.crypto.BridgePgpSigning;
+import org.sufficientlysecure.keychain.remoteagent.crypto.BridgeSignature;
 import timber.log.Timber;
 
 
@@ -396,6 +404,73 @@ public class CanonicalizedSecretKey extends CanonicalizedPublicKey {
         }
 
         return (ECPrivateKey) retVal;
+    }
+
+    /** Signs the already-computed GnuPG digest without exposing the private key. */
+    public byte[] signRsaDigest(int hashAlgorithm, byte[] digest) throws PgpGeneralException {
+        if (mPrivateKeyState != PRIVATE_KEY_STATE_UNLOCKED || mPrivateKey == null) {
+            throw new PgpGeneralException("Remote signing requires an unlocked local software key");
+        }
+        if (getAlgorithm() != PublicKeyAlgorithmTags.RSA_GENERAL
+                && getAlgorithm() != PublicKeyAlgorithmTags.RSA_SIGN) {
+            throw new PgpGeneralException("Remote signing supports RSA keys only");
+        }
+        try {
+            PrivateKey privateKey = new JcaPGPKeyConverter()
+                    .setProvider(Constants.BOUNCY_CASTLE_PROVIDER_NAME).getPrivateKey(mPrivateKey);
+            return RsaAgentCrypto.signDigest(privateKey, hashAlgorithm, digest,
+                    Constants.BOUNCY_CASTLE_PROVIDER_NAME);
+        } catch (PGPException | GeneralSecurityException e) {
+            throw new PgpGeneralException("Error signing agent digest", e);
+        } finally {
+            // This operation has no passphrase or unlocked-key cache across requests.
+            mPrivateKey = null;
+            mPrivateKeyState = PRIVATE_KEY_STATE_LOCKED;
+        }
+    }
+
+    /** Signs GnuPG's precomputed digest using pure Ed25519, without hashing it again. */
+    public byte[] signEd25519Digest(int hashAlgorithm, byte[] digest) throws PgpGeneralException {
+        try {
+            if (mPrivateKeyState != PRIVATE_KEY_STATE_UNLOCKED || mPrivateKey == null) {
+                throw new PgpGeneralException("Remote signing requires an unlocked local software key");
+            }
+            if (getAlgorithm() != PublicKeyAlgorithmTags.EDDSA
+                    || !("1.3.6.1.4.1.11591.15.1".equals(getCurveOid())
+                    || "1.3.101.112".equals(getCurveOid()))) {
+                throw new PgpGeneralException("Expected an Ed25519 signing key");
+            }
+            PrivateKey privateKey = new JcaPGPKeyConverter()
+                    .setProvider(Constants.BOUNCY_CASTLE_PROVIDER_NAME).getPrivateKey(mPrivateKey);
+            return Ed25519AgentCrypto.signDigest(privateKey, hashAlgorithm, digest,
+                    Constants.BOUNCY_CASTLE_PROVIDER_NAME);
+        } catch (PGPException | GeneralSecurityException e) {
+            throw new PgpGeneralException("Error signing Ed25519 agent digest", e);
+        } finally {
+            mPrivateKey = null;
+            mPrivateKeyState = PRIVATE_KEY_STATE_LOCKED;
+        }
+    }
+
+    /** Signs the raw gpg-bridge message using the existing OpenPGP signing algorithms. */
+    public BridgeSignature signBridgeData(byte[] data) throws PgpGeneralException {
+        try {
+            if (mPrivateKeyState != PRIVATE_KEY_STATE_UNLOCKED || mPrivateKey == null) {
+                throw new PgpGeneralException("Bridge signing requires an unlocked local software key");
+            }
+            if (!canSign()) {
+                throw new PgpGeneralException("Selected OpenPGP key cannot sign data");
+            }
+            BridgePgpSigning.validateData(data);
+            PGPSignatureGenerator generator = getDataSignatureGenerator(HashAlgorithmTags.SHA256,
+                    false, Collections.emptyMap(), new Date());
+            return BridgePgpSigning.complete(generator, mPublicKey, data);
+        } catch (PGPException | IOException e) {
+            throw new PgpGeneralException("Error signing bridge message", e);
+        } finally {
+            mPrivateKey = null;
+            mPrivateKeyState = PRIVATE_KEY_STATE_LOCKED;
+        }
     }
 
     public byte[] getIv() {

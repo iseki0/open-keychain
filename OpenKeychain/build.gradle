@@ -16,7 +16,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
 
     // JCenter etc.
-    implementation 'com.journeyapps:zxing-android-embedded:3.4.0'
+    implementation 'com.journeyapps:zxing-android-embedded:3.5.0'
     implementation 'com.google.zxing:core:3.4.0'
     implementation 'org.commonjava.googlecode.markdown4j:markdown4j:2.2-cj-1.1'
     implementation 'com.squareup.okhttp3:okhttp:3.14.9'
@@ -26,16 +26,15 @@ dependencies {
     implementation "com.squareup.sqldelight:android-driver:1.5.4"
 
     // UI
-    implementation 'org.sufficientlysecure:html-textview:3.1'
+    implementation project(':extern:html-textview')
     implementation 'com.jpardogo.materialtabstrip:library:1.1.1'
     implementation 'com.getbase:floatingactionbutton:1.10.1'
     implementation 'com.nispok:snackbar:2.11.0'
     implementation 'com.cocosw:bottomsheet:1.5.0@aar'
 
     // RecyclerView
-    implementation 'eu.davidea:flexible-adapter:5.1.0'
-    implementation 'eu.davidea:flexible-adapter-ui:1.0.0-b5'
-    implementation 'eu.davidea:flexible-adapter-livedata:1.0.0-b2'
+    implementation project(':extern:flexible-adapter')
+    implementation project(':extern:flexible-adapter-ui')
 
     // Material Drawer
     implementation 'com.mikepenz:materialdrawer:6.1.2@aar'
@@ -48,12 +47,14 @@ dependencies {
     implementation 'com.mikepenz:community-material-typeface:1.5.54.2@aar'
 
     // Nordpol
-    implementation 'com.fidesmo:nordpol-android:0.1.22'
+    implementation 'com.github.fidesmo.nordpol:nordpol-android:v0.1.22'
 
     // libs as submodules
     implementation project(':openpgp-api-lib')
     implementation project(':nfcsweetspot')
     implementation project(':sshauthentication-api')
+    implementation project(':remote-agent-protocol')
+    implementation files('../native/tailscale/tailagent.aar')
     implementation project(':extern:MaterialChipsInput')
 
     // implementation project(':openkeychain:extern:bouncycastle:core')
@@ -93,7 +94,8 @@ android {
     namespace 'org.sufficientlysecure.keychain'
 
     defaultConfig {
-        minSdkVersion 15
+        // Embedded userspace Tailscale uses Android's API 24 getifaddrs implementation.
+        minSdkVersion 24
         targetSdkVersion 34
         versionCode 60400
         versionName "6.0.4"
@@ -112,6 +114,7 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    testOptions.unitTests.includeAndroidResources = true
     testOptions.unitTests.all {
         // log results of tests to console, useful for travis
         testLogging {
@@ -127,6 +130,7 @@ android {
                           'proguard-rules-bouncycastle.pro',
                           'proguard-rules-okio.pro',
                           'proguard-rules-okhttp.pro',
+                          'proguard-rules-remote-agent.pro',
                           'proguard-rules-support.pro'
 
             // Reference them in the java files with e.g. BuildConfig.ACCOUNT_TYPE.

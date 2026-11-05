@@ -82,6 +82,16 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.Keychain.Light">
+        <activity android:name=".remoteagent.RemoteAgentActivity"
+            android:label="@string/remote_agent_title" android:exported="false" />
+        <activity android:name=".remoteagent.RemoteSignApprovalActivity"
+            android:label="@string/remote_agent_sign_request" android:exported="false"
+            android:excludeFromRecents="true" />
+        <service android:name=".remoteagent.RemoteAgentService"
+            android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled Tailscale remote OpenPGP signing with local approval" />
+        </service>
         <!-- broadcast receiver for Orbots status -->
         <receiver android:name=".network.orbot.OrbotStatusReceiver"
             android:exported="true">

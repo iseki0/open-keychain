@@ -1,0 +1,9 @@
+plugins { id 'com.android.library' }
+
+android {
+    namespace 'org.sufficientlysecure.htmltextview'
+    compileSdkVersion rootProject.ext.compileSdkVersion
+    defaultConfig { minSdkVersion 15 }
+}
+
+dependencies { implementation 'androidx.annotation:annotation:1.7.1' }

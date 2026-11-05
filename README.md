@@ -1,4 +1,14 @@
-**WARNING: This software is no longer actively developed.**
+This fork adds **embedded Tailscale remote signing** for CodexCloud and GnuPG,
+without Android's system VPN. See [setup, build instructions, and current limits](docs/remote-agent.md).
+It also accepts the [gpg-bridge v1 protocol](https://github.com/iseki0/gpg-bridge),
+with an expiring connection string and local approval for Git commit/tag signatures.
+Download this fork's APK from the [preview releases](https://github.com/iseki0/open-keychain/releases).
+The fork requires Android 7+ and supports software RSA, Ed25519, ECDSA and DSA
+signing keys through gpg-bridge, with RSA and Ed25519 also supported over Assuan.
+You can select all signing keys and allow all tailnet nodes. Every signature
+requires approval on the phone; detailed diagnostics use the existing log viewer.
+
+**Upstream maintenance notice: This software is no longer actively developed.**
 We will still apply security fixes where reported, and do basic maintenance work, but no new features or will be worked on.
 We will try to consider and merge contributions where possible.
 
@@ -42,6 +52,11 @@ I am happy about every code contribution and appreciate your effort to help us d
 Development mailinglist at https://lists.riseup.net/www/subscribe/openkeychain
 
 ### Build with Gradle
+
+For this fork, first build the native Tailscale AAR as described in
+[the remote signing guide](docs/remote-agent.md), using JDK 17, Android SDK 34,
+and the pinned Go and Android NDK versions. The historical upstream instructions
+below are retained for reference.
 
 1. Clone the project from GitHub
 2. Get all external submodules with ``git submodule update --init --recursive``
