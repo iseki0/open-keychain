@@ -62,6 +62,7 @@ public final class RemoteAgentService extends Service {
     private volatile long bridgeExpires;
     private final Semaphore sessions = new Semaphore(4);
     private final Set<Connection> connections = ConcurrentHashMap.newKeySet();
+    private final SigningPassphraseCache passphrases = new SigningPassphraseCache();
     private volatile boolean stopping;
     private volatile Node node;
     private boolean started;
@@ -74,6 +75,52 @@ public final class RemoteAgentService extends Service {
 
     static SigningApproval approval(String id) { return id == null ? null : approvals.get(id); }
     static boolean isRunning() { return active != null; }
+
+    static Object passphraseSession() {
+        RemoteAgentService service = active;
+        if (service == null) return null;
+        synchronized (service) { return service.stopping ? null : service; }
+    }
+
+    static boolean isPassphraseSession(Object session) {
+        return session != null && session == passphraseSession();
+    }
+
+    /** Always consumes the input; an old editor must never write into a new connection. */
+    static boolean setPrefilledPassphrase(Object session, String fingerprint, char[] passphrase) {
+        try {
+            RemoteAgentService service = active;
+            if (service == null || service != session) return false;
+            synchronized (service) {
+                if (service.stopping) return false;
+                service.passphrases.put(fingerprint, passphrase);
+                return true;
+            }
+        } finally {
+            Arrays.fill(passphrase, '\0');
+        }
+    }
+
+    static char[] prefilledPassphrase(String fingerprint) {
+        RemoteAgentService service = active;
+        if (service == null) return null;
+        synchronized (service) {
+            return service.stopping ? null : service.passphrases.copy(fingerprint);
+        }
+    }
+
+    static boolean hasPrefilledPassphrase(String fingerprint) {
+        RemoteAgentService service = active;
+        if (service == null) return false;
+        synchronized (service) {
+            return !service.stopping && service.passphrases.contains(fingerprint);
+        }
+    }
+
+    static void clearPrefilledPassphrases() {
+        RemoteAgentService service = active;
+        if (service != null) service.passphrases.clear();
+    }
 
     interface BridgeTicketCallback { void complete(String ticket, String error); }
 
@@ -515,7 +562,10 @@ public final class RemoteAgentService extends Service {
     }
 
     @Override public void onDestroy() {
-        synchronized (this) { stopping = true; }
+        synchronized (this) {
+            stopping = true;
+            passphrases.clear();
+        }
         RemoteAgentDiagnostics.info("Stopping remote signing and revoking active sessions");
         bridgeEpoch.incrementAndGet();
         bridgeTicket = "";

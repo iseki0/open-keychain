@@ -16,6 +16,14 @@
     <string name="remote_agent_running">Agent active. Tap to see login and connection status.</string>
     <string name="remote_agent_sign_request">Approve remote signature</string>
     <string name="remote_agent_key_password">Key passphrase (blank for an unprotected key)</string>
+    <string name="remote_agent_prefill_password">Prefill key passphrase</string>
+    <string name="remote_agent_clear_password">Clear this passphrase</string>
+    <string name="remote_agent_clear_passwords">Clear all prefilled passphrases</string>
+    <string name="remote_agent_password_prefilled">Passphrase prefilled for this connection</string>
+    <string name="remote_agent_password_prefill_details">Keep this key’s passphrase in phone memory for the current connection. Approval screens fill it in automatically; you can edit it and must still approve each signature. Disconnecting clears it. A blank value clears this key’s prefill.</string>
+    <string name="remote_agent_password_connect_first">Connect first. Prefilled passphrases last only for the current connection.</string>
+    <string name="remote_agent_password_saved">Passphrase prefill updated for this connection.</string>
+    <string name="remote_agent_passwords_cleared">All prefilled passphrases cleared.</string>
     <string name="remote_agent_approve">Approve this signature</string>
     <string name="remote_agent_deny">Deny</string>
     <string name="remote_agent_approval_details">Remote Tailscale peer:\n%1$s\n\nSigning key:\n%2$s\n%3$s\n\n%5$s digest:\n%4$s\n\nThe remote host supplies this request. The phone cannot independently verify the referenced files or repository. Approve only an operation you initiated. This request expires after at most 90 seconds.</string>

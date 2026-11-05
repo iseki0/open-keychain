@@ -10,6 +10,7 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import java.util.Arrays;
 import org.sufficientlysecure.keychain.R;
 
 /** Only an immutable, app-created notification can open an existing in-memory request. */
@@ -54,6 +55,11 @@ public final class RemoteSignApprovalActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) {
             password.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         }
+        char[] prefilled = RemoteAgentService.prefilledPassphrase(request.key.fingerprint);
+        if (prefilled != null) {
+            try { password.setText(prefilled, 0, prefilled.length); }
+            finally { Arrays.fill(prefilled, '\0'); }
+        }
         content.addView(password);
         Button approve = new Button(this);
         approve.setText(R.string.remote_agent_approve);
@@ -71,6 +77,10 @@ public final class RemoteSignApprovalActivity extends Activity {
         deny.setText(R.string.remote_agent_deny);
         deny.setOnClickListener(view -> finish());
         content.addView(deny);
+        request.answer.whenComplete((answer, failure) -> runOnUiThread(() -> {
+            password.getText().clear();
+            if (!isFinishing() && !isDestroyed()) finish();
+        }));
     }
 
     @Override protected void onDestroy() {

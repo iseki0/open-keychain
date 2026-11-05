@@ -26,6 +26,7 @@ import android.widget.Toast;
 import android.view.WindowManager;
 import androidx.core.app.NotificationManagerCompat;
 import java.util.HashSet;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import org.sufficientlysecure.keychain.R;
@@ -40,6 +41,8 @@ public final class RemoteAgentActivity extends Activity {
     private Button login;
     private Button bridgePair;
     private TextView bridgeStatus;
+    private AlertDialog passphraseDialog;
+    private Object passphraseSession;
     private String loginURL;
     private RemoteAgentStatus shownStatus;
     private long shownBridgeExpiry = Long.MIN_VALUE;
@@ -97,6 +100,11 @@ public final class RemoteAgentActivity extends Activity {
         });
         content.addView(allKeys);
         button(content, R.string.remote_agent_choose_keys, this::chooseKeys);
+        button(content, R.string.remote_agent_prefill_password, this::choosePassphraseKey);
+        button(content, R.string.remote_agent_clear_passwords, () -> {
+            RemoteAgentService.clearPrefilledPassphrases();
+            message(R.string.remote_agent_passwords_cleared);
+        });
         button(content, R.string.remote_agent_connect, this::connect);
         button(content, R.string.remote_agent_disconnect,
                 () -> stopService(new Intent(this, RemoteAgentService.class)));
@@ -220,7 +228,81 @@ public final class RemoteAgentActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(service); else startService(service);
     }
 
+    private void choosePassphraseKey() {
+        if (!RemoteAgentService.isRunning()) { message(R.string.remote_agent_password_connect_first); return; }
+        new Thread(() -> {
+            try {
+                List<RemoteSigningKey> keys = RemoteAgentConfig.selectedKeys(this, new RemoteSigningRepository(this));
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (!RemoteAgentService.isRunning()) { message(R.string.remote_agent_password_connect_first); return; }
+                    if (keys.isEmpty()) { message(R.string.remote_agent_no_keys); return; }
+                    CharSequence[] labels = new CharSequence[keys.size()];
+                    for (int i = 0; i < keys.size(); i++) {
+                        RemoteSigningKey key = keys.get(i);
+                        labels[i] = key.userId + "\n" + key.algorithmName + "\n" + key.fingerprint
+                                + (RemoteAgentService.hasPrefilledPassphrase(key.fingerprint)
+                                ? "\n" + getString(R.string.remote_agent_password_prefilled) : "");
+                    }
+                    new AlertDialog.Builder(this).setTitle(R.string.remote_agent_prefill_password)
+                            .setItems(labels, (dialog, position) -> editPassphrase(keys.get(position)))
+                            .setNegativeButton(android.R.string.cancel, null).show();
+                });
+            } catch (Exception failure) {
+                RemoteAgentDiagnostics.error("Reading signing keys for local prefill failed", failure);
+                runOnUiThread(() -> message(R.string.remote_agent_no_keys));
+            }
+        }, "signing-passphrase-keys").start();
+    }
+
+    private void editPassphrase(RemoteSigningKey key) {
+        if (passphraseDialog != null) passphraseDialog.dismiss();
+        Object session = RemoteAgentService.passphraseSession();
+        if (session == null) { message(R.string.remote_agent_password_connect_first); return; }
+        EditText password = new EditText(this);
+        password.setHint(R.string.remote_agent_key_password);
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setSingleLine(true);
+        password.setSaveEnabled(false);
+        if (Build.VERSION.SDK_INT >= 26) {
+            password.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
+        char[] prefilled = RemoteAgentService.prefilledPassphrase(key.fingerprint);
+        if (prefilled != null) {
+            try { password.setText(prefilled, 0, prefilled.length); }
+            finally { Arrays.fill(prefilled, '\0'); }
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(R.string.remote_agent_prefill_password)
+                .setMessage(key.userId + "\n" + key.fingerprint + "\n\n"
+                        + getString(R.string.remote_agent_password_prefill_details))
+                .setView(password)
+                .setPositiveButton(android.R.string.ok, (window, which) -> {
+                    char[] value = new char[password.length()];
+                    password.getText().getChars(0, value.length, value, 0);
+                    password.getText().clear();
+                    boolean saved = RemoteAgentService.setPrefilledPassphrase(session, key.fingerprint, value);
+                    message(saved ? R.string.remote_agent_password_saved : R.string.remote_agent_password_connect_first);
+                }).setNeutralButton(R.string.remote_agent_clear_password, (window, which) ->
+                        RemoteAgentService.setPrefilledPassphrase(session, key.fingerprint, new char[0]))
+                .setNegativeButton(android.R.string.cancel, null).create();
+        passphraseDialog = dialog;
+        passphraseSession = session;
+        dialog.setOnDismissListener(window -> {
+            password.getText().clear();
+            if (passphraseDialog == dialog) {
+                passphraseDialog = null;
+                passphraseSession = null;
+            }
+        });
+        dialog.show();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setFilterTouchesWhenObscured(true);
+    }
+
     private void refreshStatus() {
+        if (passphraseDialog != null && !RemoteAgentService.isPassphraseSession(passphraseSession)) {
+            passphraseDialog.dismiss();
+        }
         RemoteAgentStatus snapshot = RemoteAgentService.status();
         if (snapshot != shownStatus) {
             shownStatus = snapshot;
@@ -309,5 +391,13 @@ public final class RemoteAgentActivity extends Activity {
 
     private void message(int resource) { Toast.makeText(this, resource, Toast.LENGTH_LONG).show(); }
     @Override protected void onResume() { super.onResume(); handler.removeCallbacks(refresh); handler.post(refresh); }
-    @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
+    @Override protected void onPause() {
+        handler.removeCallbacks(refresh);
+        if (passphraseDialog != null) passphraseDialog.dismiss();
+        super.onPause();
+    }
+    @Override protected void onDestroy() {
+        if (passphraseDialog != null) passphraseDialog.dismiss();
+        super.onDestroy();
+    }
 }

@@ -16,6 +16,14 @@
     <string name="remote_agent_running">签名代理运行中，点击查看登录及连接状态。</string>
     <string name="remote_agent_sign_request">确认远端签名</string>
     <string name="remote_agent_key_password">密钥口令（无口令的密钥留空）</string>
+    <string name="remote_agent_prefill_password">预填密钥口令</string>
+    <string name="remote_agent_clear_password">清除此密钥口令</string>
+    <string name="remote_agent_clear_passwords">清除全部预填口令</string>
+    <string name="remote_agent_password_prefilled">已为当前连接预填口令</string>
+    <string name="remote_agent_password_prefill_details">口令仅保留在手机内存中，对当前连接有效。确认页会自动填入，仍可修改，每次签名仍需手动确认。断开连接即清除。留空可清除此密钥的预填口令。</string>
+    <string name="remote_agent_password_connect_first">请先连接。预填口令仅在当前连接期间有效。</string>
+    <string name="remote_agent_password_saved">已更新当前连接的预填口令。</string>
+    <string name="remote_agent_passwords_cleared">已清除全部预填口令。</string>
     <string name="remote_agent_approve">允许此次签名</string>
     <string name="remote_agent_deny">拒绝</string>
     <string name="remote_agent_approval_details">远端 Tailscale 节点：\n%1$s\n\n签名密钥：\n%2$s\n%3$s\n\n%5$s 摘要：\n%4$s\n\n请求由远端主机提供，手机无法独立验证引用的文件或仓库。仅确认由你发起的操作。请求最多等待 90 秒。</string>

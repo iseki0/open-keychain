@@ -17,7 +17,8 @@ This fork supports **Android 7.0 / API 24 or later** and local software **RSA,
 Ed25519, ECDSA and DSA signing keys** through gpg-bridge. Assuan supports RSA and
 Ed25519 with SHA-256, SHA-384 and SHA-512. Existing OpenKeychain keys
 remain in the phone's key storage. Each signature requires an explicit approval
-and key passphrase on the phone, including when the key has no passphrase.
+on the phone, including when the key has no passphrase. Key passphrases can be
+prefilled on the phone for the current connection.
 Hardware-token keys, decryption, private-key export, SSH agent forwarding,
 and unattended approval are outside this version's scope.
 
@@ -264,10 +265,22 @@ update the phone's allowlist and revoke old nodes.
 ## Approval and limits
 
 Open the signing-request notification on the phone. The approval screen shows
-the authenticated peer, selected key, hash algorithm, and digest. Confirm and
-enter the passphrase there. Rejecting, timing out, stopping the service, or
+the authenticated peer, selected key, hash algorithm, and digest. Enter or edit
+the passphrase there, then tap **Approve this signature**. To avoid retyping it,
+connect first, then use **Prefill key passphrase** in the remote-signing settings
+and select an enabled signing key. Repeat for keys with different passphrases.
+The prefill belongs to that exact signing-key fingerprint and works for both
+Assuan and gpg-bridge. It never approves a request automatically.
+
+Prefills stay only in the phone's memory for the current connection; disconnecting,
+stopping the service, or process exit clears them. **Clear all prefilled passphrases**
+clears the cache immediately; the per-key editor also offers a clear button,
+and saving a blank value removes that key's prefill. Passphrases are never written
+to settings, saved screen state, logs, connection strings, or the cloud.
+
+Rejecting, timing out, stopping the service, or
 changing the enabled key selection fails the request. Passphrases are not sent
-to the cloud or intentionally cached by this feature.
+to the cloud. Editing a passphrase for one approval does not change its prefill.
 
 GnuPG agent signing transports a **digest**, so the phone cannot independently
 show the original document, Git diff, or commit message. Remote-provided
