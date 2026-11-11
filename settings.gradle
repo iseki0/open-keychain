@@ -9,3 +9,7 @@ include ':openpgp-api-lib'
 project(':openpgp-api-lib').projectDir = new File('extern/openpgp-api-lib/openpgp-api')
 include ':sshauthentication-api'
 project(':sshauthentication-api').projectDir = new File('sshauthentication-api')
+include ':remote-agent-protocol'
+include ':extern:html-textview'
+include ':extern:flexible-adapter'
+include ':extern:flexible-adapter-ui'

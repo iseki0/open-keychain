@@ -891,7 +891,12 @@ public abstract class OperationResult implements Parcelable {
         MSG_TRUST_KEY (LogLevel.INFO, R.string.msg_trust_key),
         MSG_TRUST_INITIALIZE (LogLevel.INFO, R.string.msg_trust_initialize),
         MSG_TRUST_COUNT_NONE (LogLevel.DEBUG, R.string.msg_trust_count_none),
-        MSG_TRUST_COUNT (LogLevel.DEBUG, R.plurals.msg_trust_count);
+        MSG_TRUST_COUNT (LogLevel.DEBUG, R.plurals.msg_trust_count),
+
+        // Append only: LogEntryParcel stores enum ordinals in its parcel representation.
+        MSG_REMOTE_AGENT_DIAGNOSTIC_INFO (LogLevel.INFO, R.string.remote_agent_diagnostic_info),
+        MSG_REMOTE_AGENT_DIAGNOSTIC_WARN (LogLevel.WARN, R.string.remote_agent_diagnostic_warn),
+        MSG_REMOTE_AGENT_DIAGNOSTIC_ERROR (LogLevel.ERROR, R.string.remote_agent_diagnostic_error);
 
         public final int mMsgId;
         public final LogLevel mLevel;

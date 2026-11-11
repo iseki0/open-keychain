@@ -1,4 +1,7 @@
 <preference-headers xmlns:android="http://schemas.android.com/apk/res/android">
+    <header android:id="@+id/remote_agent_header" android:title="@string/remote_agent_title"
+        android:summary="@string/remote_agent_settings_summary"
+        android:icon="@drawable/ic_lock_black_24dp" />
     <!--<header-->
     <!--android:fragment="org.sufficientlysecure.keychain.ui.SettingsActivity$GuiPrefsFragment"-->
     <!--android:title="@string/section_gui" />-->
