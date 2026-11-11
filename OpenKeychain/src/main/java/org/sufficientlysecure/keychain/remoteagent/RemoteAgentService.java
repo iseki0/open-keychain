@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
@@ -72,6 +73,7 @@ public final class RemoteAgentService extends Service {
     private String lastBackendState = "";
     private String lastStatusFailure = "";
     private String lastNetwork = "";
+    private volatile long lastBridgeRestore;
 
     static SigningApproval approval(String id) { return id == null ? null : approvals.get(id); }
     static boolean isRunning() { return active != null; }
@@ -117,6 +119,15 @@ public final class RemoteAgentService extends Service {
         }
     }
 
+    /**
+     * Passphrase for an approval or an automatic signature: this connection's prefill first,
+     * then the encrypted passphrase saved on the device. Returns a copy for the caller to wipe.
+     */
+    static char[] approvalPassphrase(Context context, String fingerprint) {
+        char[] prefilled = prefilledPassphrase(fingerprint);
+        return prefilled != null ? prefilled : RemoteAgentSecrets.passphrase(context, fingerprint);
+    }
+
     static void clearPrefilledPassphrases() {
         RemoteAgentService service = active;
         if (service != null) service.passphrases.clear();
@@ -143,9 +154,14 @@ public final class RemoteAgentService extends Service {
         catch (RejectedExecutionException ignored) { callback.complete(null, null); }
     }
 
-    static void revokeBridge() {
+    /** Revokes the connection string permanently, including its saved encrypted credentials. */
+    static void revokeBridge(Context context) {
+        RemoteAgentSecrets.clearBridgeState(context);
         RemoteAgentService service = active;
-        if (service == null) return;
+        if (service == null) {
+            RemoteAgentDiagnostics.info("Revoked saved gpg-bridge session");
+            return;
+        }
         RemoteAgentDiagnostics.info("Revoking gpg-bridge session");
         service.bridgeEpoch.incrementAndGet();
         service.bridgeTicket = "";
@@ -186,11 +202,27 @@ public final class RemoteAgentService extends Service {
                     return approveBridgeSign(epoch, fingerprint, data, peerName + " (" + peerID + ")");
                 }
             };
-            String ticket = current.startBridge(backend, 8 * 60 * 60);
+            String saved = RemoteAgentSecrets.bridgeState(this);
+            String started;
+            try {
+                started = current.startPersistentBridge(backend, saved == null ? "" : saved);
+            } catch (Exception failure) {
+                if (saved == null || !invalidSavedBridge(failure)) throw failure;
+                RemoteAgentDiagnostics.error("Saved gpg-bridge session rejected; creating a new connection string", failure);
+                RemoteAgentSecrets.clearBridgeState(this);
+                started = current.startPersistentBridge(backend, "");
+            }
+            JSONObject startedJson = new JSONObject(started);
+            String ticket = startedJson.getString("ticket");
+            RemoteAgentSecrets.saveBridgeState(this, startedJson.getString("state"));
             if (stopping || bridgeEpoch.get() != epoch) {
+                // A revocation that raced this start must not leave credentials behind.
+                if (bridgeEpoch.get() != epoch) RemoteAgentSecrets.clearBridgeState(this);
                 current.stopBridge();
                 throw new IOException("Session revoked");
             }
+            if (saved == null) RemoteAgentDiagnostics.info("Created a new long-lived gpg-bridge connection string");
+            else RemoteAgentDiagnostics.info("Restored the saved gpg-bridge connection string");
             byte[] encoded = android.util.Base64.decode(ticket.substring("gpgbridge:v1:".length()),
                     android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP | android.util.Base64.NO_PADDING);
             long expires = new JSONObject(new String(encoded, java.nio.charset.StandardCharsets.UTF_8))
@@ -207,6 +239,29 @@ public final class RemoteAgentService extends Service {
             Node current = node;
             if (current != null) { try { current.stopBridge(); } catch (Exception ignored) {} }
             callback.complete(null, getString(R.string.remote_bridge_create_failed));
+        }
+    }
+
+    private static boolean invalidSavedBridge(Exception failure) {
+        String message = failure.getMessage();
+        return message != null && (message.contains("saved gpg-bridge state")
+                || message.contains("gpg-bridge key material") || message.contains("invalid gpg-bridge session")
+                || message.contains("gpg-bridge session expired"));
+    }
+
+    /** Restores a saved long-lived bridge once Tailscale is running, e.g. after a reboot. */
+    private void maybeRestoreBridge(String backendState) {
+        if (stopping || !"Running".equals(backendState) || !bridgeTicket.isEmpty()) return;
+        if (!RemoteAgentSecrets.hasBridgeState(this)) return;
+        long now = System.currentTimeMillis();
+        if (now - lastBridgeRestore < 30_000) return;
+        lastBridgeRestore = now;
+        try {
+            bridgeControl.execute(() -> startBridge((ticket, error) -> {
+                if (ticket == null) RemoteAgentDiagnostics.warn("Restoring gpg-bridge failed; retrying in 30 seconds");
+            }));
+        } catch (RejectedExecutionException ignored) {
+            // The service is stopping.
         }
     }
 
@@ -230,6 +285,8 @@ public final class RemoteAgentService extends Service {
         RemoteSigningRepository repository = new RemoteSigningRepository(this);
         RemoteSigningKey key = bridgeKey(repository, fingerprint);
         byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(data);
+        String automatic = autoSignBridge(epoch, repository, key, data, digest, peer);
+        if (automatic != null) return automatic;
         SigningApproval request = new SigningApproval(peer, key, 8, digest,
                 getString(R.string.remote_bridge_bytes, data.length) + "\n\n" + bridgePreview(data));
         int notificationId = notificationIds.incrementAndGet();
@@ -263,6 +320,77 @@ public final class RemoteAgentService extends Service {
             if (password != null) Arrays.fill(password, '\0');
             getSystemService(NotificationManager.class).cancel(notificationId);
         }
+    }
+
+    /**
+     * Unattended approval for gpg-bridge only. Go has already restricted the payload to a Git
+     * commit or tag object; Assuan digests always require a tap. Returns null to fall back
+     * to a manual approval, e.g. when no passphrase is saved or the saved one is wrong.
+     */
+    private String autoSignBridge(long epoch, RemoteSigningRepository repository, RemoteSigningKey key,
+            byte[] data, byte[] digest, String peer) throws Exception {
+        if (!RemoteAgentConfig.autoApproveBridge(this)) return null;
+        char[] password = approvalPassphrase(this, key.fingerprint);
+        if (password == null && repository.hasEmptyPassphrase(key)) password = new char[0];
+        if (password == null) {
+            RemoteAgentDiagnostics.info("Automatic approval skipped: no saved passphrase for " + key.fingerprint);
+            return null;
+        }
+        BridgeSignature signed;
+        try {
+            requireBridge(epoch);
+            signed = repository.signData(bridgeKey(repository, key.fingerprint), data, password);
+        } catch (java.security.GeneralSecurityException failure) {
+            RemoteAgentDiagnostics.error("Automatic approval failed; asking on the phone", failure);
+            return null;
+        } finally {
+            Arrays.fill(password, '\0');
+        }
+        requireBridge(epoch);
+        RemoteAgentDiagnostics.info("gpg-bridge signature auto-approved: peer=" + peer + ", key=" + key.fingerprint
+                + ", bytes=" + data.length);
+        notifyAutoSigned(key, peer, data, digest);
+        return new JSONObject().put("signature", signed.signature).put("status", signed.status).toString();
+    }
+
+    private void notifyAutoSigned(RemoteSigningKey key, String peer, byte[] data, byte[] digest) {
+        try {
+            if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) return;
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 8 && i < digest.length; i++)
+                hex.append(String.format(java.util.Locale.ROOT, "%02X", digest[i] & 255));
+            String details = getString(R.string.remote_bridge_auto_signed_details, gitSubject(data), peer,
+                    key.userId, key.fingerprint, hex.toString());
+            int id = notificationIds.incrementAndGet();
+            getSystemService(NotificationManager.class).notify(id,
+                    notification(getString(R.string.remote_bridge_auto_signed), new Intent(this, RemoteAgentActivity.class), id)
+                            .setStyle(new NotificationCompat.BigTextStyle().bigText(details))
+                            .setAutoCancel(true).build());
+        } catch (RuntimeException failure) {
+            RemoteAgentDiagnostics.error("Posting the automatic-signature notification failed", failure);
+        }
+    }
+
+    /** The first message line of a Git commit or tag, escaped for display. */
+    static String gitSubject(byte[] data) {
+        String text = new String(data, 0, Math.min(data.length, 32768), java.nio.charset.StandardCharsets.UTF_8);
+        int body = text.indexOf("\n\n");
+        String line = body < 0 ? "" : text.substring(body + 2);
+        int end = line.indexOf('\n');
+        if (end >= 0) line = line.substring(0, end);
+        StringBuilder output = new StringBuilder();
+        int index = 0;
+        while (index < line.length() && output.length() < 120) {
+            int value = line.codePointAt(index);
+            int type = Character.getType(value);
+            if (Character.isISOControl(value) || type == Character.FORMAT || type == Character.PRIVATE_USE
+                    || type == Character.UNASSIGNED || type == Character.SURROGATE)
+                output.append(String.format(java.util.Locale.ROOT, "\\u{%X}", value));
+            else output.appendCodePoint(value);
+            index += Character.charCount(value);
+        }
+        if (index < line.length()) output.append('…');
+        return output.toString();
     }
 
     private String bridgePreview(byte[] data) {
@@ -325,14 +453,22 @@ public final class RemoteAgentService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(SERVICE_NOTIFICATION, notification(getString(R.string.remote_agent_running),
-                new Intent(this, RemoteAgentActivity.class), SERVICE_NOTIFICATION).setOngoing(true).build());
+        try {
+            startForeground(SERVICE_NOTIFICATION, notification(getString(R.string.remote_agent_running),
+                    new Intent(this, RemoteAgentActivity.class), SERVICE_NOTIFICATION).setOngoing(true).build());
+        } catch (RuntimeException failure) {
+            // Android 12+ can refuse a background start (ForegroundServiceStartNotAllowedException).
+            RemoteAgentDiagnostics.error("Starting the foreground service was not allowed", failure);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (!started) {
             started = true;
             publishStatus(RemoteAgentStatus.message("Connecting"));
             workers.execute(this::listen);
         }
-        return START_NOT_STICKY;
+        // Long-lived bridge mode: let Android restart the signer if it kills the process.
+        return START_STICKY;
     }
 
     private void listen() {
@@ -364,6 +500,7 @@ public final class RemoteAgentService extends Service {
                         publishStatus(state);
                     }
                     String backend = state.backendState;
+                    maybeRestoreBridge(backend);
                     if (!backend.equals(lastBackendState)) {
                         lastBackendState = backend;
                         RemoteAgentDiagnostics.info("Tailscale state=" + backend

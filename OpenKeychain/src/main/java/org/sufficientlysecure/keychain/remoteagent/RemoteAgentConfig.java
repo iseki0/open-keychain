@@ -9,7 +9,10 @@ import java.util.List;
 import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningKey;
 import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningRepository;
 
-/** Local opt-in configuration. Neither passwords nor Tailscale auth keys are stored here. */
+/**
+ * Local opt-in configuration. Neither passwords nor Tailscale auth keys are stored here;
+ * saved passphrases and bridge credentials live encrypted in {@link RemoteAgentSecrets}.
+ */
 final class RemoteAgentConfig {
     static final int PORT = 17373;
     static SharedPreferences preferences(Context context) {
@@ -20,6 +23,14 @@ final class RemoteAgentConfig {
                 .getStringSet("fingerprints", Collections.emptySet())));
     }
     static boolean allKeys(Context context) { return preferences(context).getBoolean("all_keys", false); }
+
+    /** Sign gpg-bridge Git commit/tag requests without a confirmation tap when a passphrase is available. */
+    static boolean autoApproveBridge(Context context) {
+        return preferences(context).getBoolean("auto_approve_bridge", false);
+    }
+
+    /** Start the foreground service after boot and after app updates. */
+    static boolean startOnBoot(Context context) { return preferences(context).getBoolean("start_on_boot", false); }
 
     static List<RemoteSigningKey> selectedKeys(Context context, RemoteSigningRepository repository) throws Exception {
         return allKeys(context) ? repository.listAvailableKeys() : repository.listKeys(fingerprints(context));

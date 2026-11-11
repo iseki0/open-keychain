@@ -72,6 +72,7 @@
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- android:allowBackup="false": Don't allow backup over adb backup or other apps! -->
     <application
@@ -87,6 +88,12 @@
         <activity android:name=".remoteagent.RemoteSignApprovalActivity"
             android:label="@string/remote_agent_sign_request" android:exported="false"
             android:excludeFromRecents="true" />
+        <receiver android:name=".remoteagent.RemoteAgentBootReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <service android:name=".remoteagent.RemoteAgentService"
             android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

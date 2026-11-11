@@ -124,6 +124,9 @@ android {
 
     buildTypes {
         release {
+            // This fork's release must not collide with upstream OpenKeychain's package,
+            // signature or content-provider authorities.
+            applicationIdSuffix ".tailscale"
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'),
                           'proguard-rules-base.pro',
@@ -134,12 +137,12 @@ android {
                           'proguard-rules-support.pro'
 
             // Reference them in the java files with e.g. BuildConfig.ACCOUNT_TYPE.
-            buildConfigField "String", "ACCOUNT_TYPE", "\"org.sufficientlysecure.keychain.account\""
-            buildConfigField "String", "PROVIDER_CONTENT_AUTHORITY", "\"org.sufficientlysecure.keychain.provider\""
+            buildConfigField "String", "ACCOUNT_TYPE", "\"org.sufficientlysecure.keychain.tailscale.account\""
+            buildConfigField "String", "PROVIDER_CONTENT_AUTHORITY", "\"org.sufficientlysecure.keychain.tailscale.provider\""
 
             // Reference them in .xml files.
-            resValue "string", "account_type", "org.sufficientlysecure.keychain.account"
-            resValue "string", "provider_content_authority", "org.sufficientlysecure.keychain.provider"
+            resValue "string", "account_type", "org.sufficientlysecure.keychain.tailscale.account"
+            resValue "string", "provider_content_authority", "org.sufficientlysecure.keychain.tailscale.provider"
 
             // Github API
             buildConfigField "String", "GITHUB_CLIENT_ID", "\"c942cd81844d94e7e41b\""
@@ -180,31 +183,46 @@ android {
     }
 
     /*
-     * To sign release build, create file gradle.properties in ~/.gradle/ with this content:
-     *
-     * signingStoreLocation=/home/key.store
-     * signingStorePassword=xxx
-     * signingKeyAlias=alias
-     * signingKeyPassword=xxx
+     * Release signing: either ~/.gradle/gradle.properties with
+     *   signingStoreLocation, signingStorePassword, signingKeyAlias, signingKeyPassword
+     * or the RELEASE_KEYSTORE_FILE, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS
+     * environment variables (CI). DEBUG_KEYSTORE_FILE, DEBUG_KEYSTORE_PASSWORD and
+     * DEBUG_KEY_ALIAS give debug builds a stable certificate so previews can upgrade.
      */
-    if (project.hasProperty('signingStoreLocation') &&
-            project.hasProperty('signingStorePassword') &&
-            project.hasProperty('signingKeyAlias') &&
-            project.hasProperty('signingKeyPassword')) {
-        println "Found sign properties in gradle.properties! Signing build…"
+    def signingValue = { String property, String environment ->
+        project.hasProperty(property) ? project.property(property) : System.getenv(environment)
+    }
+    def releaseStore = signingValue('signingStoreLocation', 'RELEASE_KEYSTORE_FILE')
+    def releaseStorePassword = signingValue('signingStorePassword', 'RELEASE_KEYSTORE_PASSWORD')
+    def releaseAlias = signingValue('signingKeyAlias', 'RELEASE_KEY_ALIAS')
+    def releaseKeyPassword = signingValue('signingKeyPassword', 'RELEASE_KEYSTORE_PASSWORD')
+    def debugStore = System.getenv('DEBUG_KEYSTORE_FILE')
+    def debugStorePassword = System.getenv('DEBUG_KEYSTORE_PASSWORD')
+    def debugAlias = System.getenv('DEBUG_KEY_ALIAS')
 
-        signingConfigs {
+    signingConfigs {
+        if (releaseStore && releaseStorePassword && releaseAlias && releaseKeyPassword) {
+            println "Release signing configured"
             release {
-                storeFile file(signingStoreLocation)
-                storePassword signingStorePassword
-                keyAlias signingKeyAlias
-                keyPassword signingKeyPassword
+                storeFile file(releaseStore)
+                storePassword releaseStorePassword
+                keyAlias releaseAlias
+                keyPassword releaseKeyPassword
             }
         }
-
-        buildTypes.release.signingConfig = signingConfigs.release
-    } else {
-        buildTypes.release.signingConfig = null
+        if (debugStore && debugStorePassword && debugAlias) {
+            println "Stable debug signing configured"
+            stableDebug {
+                storeFile file(debugStore)
+                storePassword debugStorePassword
+                keyAlias debugAlias
+                keyPassword debugStorePassword
+            }
+        }
+    }
+    buildTypes.release.signingConfig = signingConfigs.findByName('release')
+    if (signingConfigs.findByName('stableDebug') != null) {
+        buildTypes.debug.signingConfig = signingConfigs.stableDebug
     }
 
     // NOTE: Lint is disabled because it slows down builds,

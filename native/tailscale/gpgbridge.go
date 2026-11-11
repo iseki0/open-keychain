@@ -6,6 +6,7 @@ package tailagent
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -29,6 +30,10 @@ const bridgeMaxWire = 2 * 1024 * 1024
 const bridgeMaxPlain = bridgeMaxWire - 4096
 const bridgeChunk = 60000
 
+// bridgePersistentExpires is the advertised expiry of a bridge that stays valid until
+// it is revoked on the phone. gpg-bridge clients require a finite future timestamp.
+const bridgePersistentExpires int64 = 4102444800 // 2100-01-01T00:00:00Z
+
 var bridgeEncoding = base64.RawURLEncoding.Strict()
 var bridgeSuite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s)
 
@@ -49,6 +54,21 @@ type bridgeTicket struct {
 	PSK          string `json:"psk"`
 	Session      string `json:"session"`
 	Expires      int64  `json:"expires"`
+}
+
+// bridgeState is the secret material needed to restore a persistent bridge with the
+// same connection string. It contains the Noise private key and PSK.
+type bridgeState struct {
+	Version int    `json:"version"`
+	Private string `json:"private"`
+	PSK     string `json:"psk"`
+	Session string `json:"session"`
+	Expires int64  `json:"expires"`
+}
+
+type bridgePersistentResult struct {
+	Ticket string `json:"ticket"`
+	State  string `json:"state"`
 }
 
 type bridgeSigningKey struct {
@@ -110,14 +130,56 @@ type bridgeServer struct {
 // Call this on a worker thread.
 func (n *Node) StartBridge(backend BridgeBackend, ttlSeconds int64) (ticket string, err error) {
 	defer recoverError(&err)
+	s, err := n.startBridge(backend, func(endpoint string) (*bridgeServer, error) {
+		return newBridgeServer(backend, endpoint, ttlSeconds)
+	})
+	if err != nil {
+		return "", err
+	}
+	return s.ticketString()
+}
+
+// StartPersistentBridge starts a bridge that stays valid until StopBridge, Close,
+// or the 2100 expiry. An empty savedState creates new credentials; otherwise the
+// saved Noise key, PSK and session are reused so existing clients keep working
+// after the phone restarts. The endpoint always uses the node's current tailnet
+// address. The JSON result holds "ticket" and "state"; both are secrets and the
+// caller must store state only in encrypted form. Call this on a worker thread.
+func (n *Node) StartPersistentBridge(backend BridgeBackend, savedState string) (result string, err error) {
+	defer recoverError(&err)
+	s, err := n.startBridge(backend, func(endpoint string) (*bridgeServer, error) {
+		if savedState == "" {
+			return newPersistentBridgeServer(backend, endpoint)
+		}
+		return restoreBridgeServer(backend, endpoint, savedState)
+	})
+	if err != nil {
+		return "", err
+	}
+	ticket, err := s.ticketString()
+	if err != nil {
+		return "", err
+	}
+	state, err := s.stateString()
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(bridgePersistentResult{Ticket: ticket, State: state})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func (n *Node) startBridge(backend BridgeBackend, create func(endpoint string) (*bridgeServer, error)) (*bridgeServer, error) {
 	n.bridgeMu.Lock()
 	defer n.bridgeMu.Unlock()
 	if backend == nil {
-		return "", errors.New("signing backend is required")
+		return nil, errors.New("signing backend is required")
 	}
 	if n.bridge != nil {
-		if existing, e := n.bridge.ticketString(); e == nil {
-			return existing, nil
+		if _, e := n.bridge.ticketString(); e == nil {
+			return n.bridge, nil
 		}
 		n.bridge.close()
 		n.bridge = nil
@@ -126,37 +188,37 @@ func (n *Node) StartBridge(backend BridgeBackend, ttlSeconds int64) (ticket stri
 	client, ctx, closed, started, startErr := n.client, n.ctx, n.closed, n.started, n.startErr
 	n.mu.Unlock()
 	if closed {
-		return "", net.ErrClosed
+		return nil, net.ErrClosed
 	}
 	if !started || startErr != nil || client == nil {
-		return "", errors.New("connect to Tailscale before starting gpg-bridge")
+		return nil, errors.New("connect to Tailscale before starting gpg-bridge")
 	}
 	statusCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	status, err := client.StatusWithoutPeers(statusCtx)
 	if err != nil || status == nil || status.BackendState != "Running" || len(status.TailscaleIPs) == 0 {
-		return "", errors.New("sign in to Tailscale before starting gpg-bridge")
+		return nil, errors.New("sign in to Tailscale before starting gpg-bridge")
 	}
 	endpoint := "http://" + net.JoinHostPort(status.TailscaleIPs[0].String(), "17389")
-	s, err := newBridgeServer(backend, endpoint, ttlSeconds)
+	s, err := create(endpoint)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if _, err := s.info(); err != nil {
 		s.close()
-		return "", errors.New("choose at least one available signing key before starting gpg-bridge")
+		return nil, errors.New("choose at least one available signing key before starting gpg-bridge")
 	}
 	n.mu.Lock()
 	if n.closed {
 		n.mu.Unlock()
 		s.close()
-		return "", net.ErrClosed
+		return nil, net.ErrClosed
 	}
 	listener, err := n.server.Listen("tcp", ":17389")
 	n.mu.Unlock()
 	if err != nil {
 		s.close()
-		return "", err
+		return nil, err
 	}
 	s.listener = &bridgeAuthorizedListener{Listener: listener, node: n}
 	s.http = &http.Server{
@@ -175,7 +237,7 @@ func (n *Node) StartBridge(backend BridgeBackend, ttlSeconds int64) (ticket stri
 	s.timer = time.AfterFunc(time.Until(time.Unix(s.ticket.Expires, 0)), s.close)
 	s.mu.Unlock()
 	go func() { _ = s.http.Serve(s.listener) }()
-	return s.ticketString()
+	return s, nil
 }
 
 // BridgeTicket returns the active temporary ticket, or an error after expiry.
@@ -206,25 +268,90 @@ func newBridgeServer(backend BridgeBackend, endpoint string, ttlSeconds int64) (
 	if backend == nil || ttlSeconds < 1 || ttlSeconds > 24*60*60 {
 		return nil, errors.New("gpg-bridge lifetime must be between 1 second and 24 hours")
 	}
-	pair, err := bridgeSuite.GenerateKeypair(rand.Reader)
+	return newRandomBridgeServer(backend, endpoint, time.Now().Unix()+ttlSeconds)
+}
+
+func newPersistentBridgeServer(backend BridgeBackend, endpoint string) (*bridgeServer, error) {
+	return newRandomBridgeServer(backend, endpoint, bridgePersistentExpires)
+}
+
+func newRandomBridgeServer(backend BridgeBackend, endpoint string, expires int64) (*bridgeServer, error) {
+	private, psk, session := make([]byte, 32), make([]byte, 32), make([]byte, 16)
+	for _, value := range [][]byte{private, psk, session} {
+		if _, err := io.ReadFull(rand.Reader, value); err != nil {
+			return nil, err
+		}
+	}
+	defer clear(private)
+	defer clear(psk)
+	return newBridgeServerWithMaterial(backend, endpoint, private, psk,
+		bridgeEncoding.EncodeToString(session), expires)
+}
+
+func restoreBridgeServer(backend BridgeBackend, endpoint string, saved string) (*bridgeServer, error) {
+	if len(saved) > 4096 {
+		return nil, errors.New("invalid saved gpg-bridge state")
+	}
+	var state bridgeState
+	if bridgeDecodeJSON([]byte(saved), &state) != nil || state.Version != 1 {
+		return nil, errors.New("invalid saved gpg-bridge state")
+	}
+	private, err := bridgeEncoding.DecodeString(state.Private)
+	if err != nil {
+		return nil, errors.New("invalid saved gpg-bridge state")
+	}
+	defer clear(private)
+	psk, err := bridgeEncoding.DecodeString(state.PSK)
+	if err != nil {
+		return nil, errors.New("invalid saved gpg-bridge state")
+	}
+	defer clear(psk)
+	return newBridgeServerWithMaterial(backend, endpoint, private, psk, state.Session, state.Expires)
+}
+
+// newBridgeServerWithMaterial copies private and psk; the caller keeps ownership.
+func newBridgeServerWithMaterial(backend BridgeBackend, endpoint string, private, psk []byte,
+	session string, expires int64) (*bridgeServer, error) {
+	if backend == nil {
+		return nil, errors.New("signing backend is required")
+	}
+	if len(private) != 32 || len(psk) != 32 {
+		return nil, errors.New("invalid gpg-bridge key material")
+	}
+	if decoded, err := bridgeEncoding.DecodeString(session); err != nil || len(decoded) < 16 || len(session) > 128 {
+		return nil, errors.New("invalid gpg-bridge session")
+	}
+	if expires <= time.Now().Unix() || expires > bridgePersistentExpires {
+		return nil, errors.New("gpg-bridge session expired")
+	}
+	key, err := ecdh.X25519().NewPrivateKey(private)
 	if err != nil {
 		return nil, err
 	}
-	psk, session := make([]byte, 32), make([]byte, 16)
-	if _, err = io.ReadFull(rand.Reader, psk); err != nil {
-		return nil, err
-	}
-	if _, err = io.ReadFull(rand.Reader, session); err != nil {
-		return nil, err
-	}
+	public := key.PublicKey().Bytes()
 	return &bridgeServer{
-		backend: backend, private: pair.Private, public: pair.Public, psk: psk,
+		backend: backend, private: bytes.Clone(private), public: public, psk: bytes.Clone(psk),
 		ticket: bridgeTicket{Version: 1, Endpoint: endpoint,
-			ServerPublic: bridgeEncoding.EncodeToString(pair.Public), PSK: bridgeEncoding.EncodeToString(psk),
-			Session: bridgeEncoding.EncodeToString(session), Expires: time.Now().Unix() + ttlSeconds},
+			ServerPublic: bridgeEncoding.EncodeToString(public), PSK: bridgeEncoding.EncodeToString(psk),
+			Session: session, Expires: expires},
 		pending: make(map[string]*bridgePending), requests: make(chan struct{}, 32), signing: make(chan struct{}, 1),
 		rateStart: time.Now(),
 	}, nil
+}
+
+// stateString returns the secret material needed to restore this bridge.
+func (s *bridgeServer) stateString() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || time.Now().Unix() >= s.ticket.Expires {
+		return "", errors.New("gpg-bridge session expired")
+	}
+	data, err := json.Marshal(bridgeState{Version: 1, Private: bridgeEncoding.EncodeToString(s.private),
+		PSK: bridgeEncoding.EncodeToString(s.psk), Session: s.ticket.Session, Expires: s.ticket.Expires})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func (s *bridgeServer) ticketString() (string, error) {
