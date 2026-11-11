@@ -16,11 +16,13 @@ app is required for either protocol.
 This fork supports **Android 7.0 / API 24 or later** and local software **RSA,
 Ed25519, ECDSA and DSA signing keys** through gpg-bridge. Assuan supports RSA and
 Ed25519 with SHA-256, SHA-384 and SHA-512. Existing OpenKeychain keys
-remain in the phone's key storage. Each signature requires an explicit approval
-on the phone, including when the key has no passphrase. Key passphrases can be
-prefilled on the phone for the current connection.
-Hardware-token keys, decryption, private-key export, SSH agent forwarding,
-and unattended approval are outside this version's scope.
+remain in the phone's key storage. By default each signature requires an explicit
+approval on the phone, including when the key has no passphrase. Key passphrases can
+be prefilled for the current connection or saved encrypted on the device. gpg-bridge
+Git commit and tag signatures can optionally be approved automatically (see
+[Unattended signing](#unattended-signing)); Assuan requests always need a tap.
+Hardware-token keys, decryption, private-key export and SSH agent forwarding are
+outside this version's scope.
 
 ## Download the APK
 
@@ -131,10 +133,14 @@ backup restriction also covers this state.
 After enrolling the phone and selecting its signing keys and allowed cloud
 node policy, tap **Create or view gpg-bridge connection string** in the remote
 signing screen. The node must be signed in and connected. Copy the generated
-`gpgbridge:v1:...` string to the intended cloud task. It is an eight-hour
-credential, kept only in memory on the phone. **Revoke gpg-bridge session**
-invalidates it immediately; disconnecting or stopping OpenKeychain also ends
-the session. Revocation leaves the separate Assuan endpoint available while the
+`gpgbridge:v1:...` string to the intended cloud task. It stays valid until you
+revoke it: its Noise key, PSK and session are saved encrypted with an Android
+Keystore key, and the bridge resumes with the same string whenever the service
+connects again, including after a reboot. (The string carries a nominal expiry of
+2100-01-01 because gpg-bridge clients require a timestamp.) If the phone's tailnet
+address changes, create the string again. **Revoke gpg-bridge connection string**
+invalidates it immediately and deletes the saved credentials; disconnecting only
+pauses it. Revocation leaves the separate Assuan endpoint available while the
 Tailscale node remains connected.
 
 Install your existing [gpg-bridge Linux client](https://github.com/iseki0/gpg-bridge)
@@ -262,6 +268,31 @@ The SOCKS5 proxy must bind to loopback. Treat its state directory as a
 credential. Reenrolling an ephemeral cloud node can change its stable NodeID;
 update the phone's allowlist and revoke old nodes.
 
+## Unattended signing
+
+All three options are off by default and are set in the remote-signing screen.
+
+* **Save key passphrase on this device** stores a passphrase encrypted with a
+  non-exportable AES-256-GCM Android Keystore key (no user-authentication
+  requirement, so it works while the phone is locked). The passphrase is checked
+  against the key before it is saved. Saved passphrases fill in approval screens,
+  survive restarts and are deleted when the app data is cleared or with **Delete
+  all saved passphrases**. A connection prefill, if present, takes precedence.
+* **Automatically approve gpg-bridge Git commit and tag signatures** signs
+  gpg-bridge requests without a tap when a saved or prefilled passphrase exists
+  (or the key has no passphrase). The native bridge has already restricted the
+  payload to a Git commit or tag object. Each automatic signature posts a
+  notification with the commit subject, peer, key and digest prefix, and is
+  recorded in the diagnostic log. A wrong saved passphrase falls back to a normal
+  approval. Assuan requests are never approved automatically because they only
+  carry a digest. While enabled, anyone holding the connection string who can
+  reach the phone through an allowed tailnet node can sign Git objects in your
+  name, so restrict the node policy and revoke the string if it leaks.
+* **Start remote signing after the phone boots** starts the foreground service
+  after boot and after app updates (notifications must be allowed). The service
+  is sticky, so Android restarts it if the process is killed; **Disconnect**
+  stops it until the next manual start or boot.
+
 ## Approval and limits
 
 Open the signing-request notification on the phone. The approval screen shows
@@ -345,11 +376,38 @@ OpenKeychain. Encryption-only keys cannot sign; revoked/expired keys, missing
 private material and hardware-token-only records are identified in the inventory
 rather than treated as available software signers.
 
-Each CI preview currently uses that runner's generated debug signing key. A new
-preview can therefore have a different Android signing certificate and cannot
-overwrite an earlier preview. Before migrating, back up any keys in the existing
-preview locally on the phone; do not uninstall an app containing your only key
-copy. A persistent signing keystore is needed for a stable upgrade channel.
+## APK signing and packages
+
+CI builds two APKs:
+
+* `OpenKeychain-tailscale-release.apk`: non-debuggable release build, package
+  `org.sufficientlysecure.keychain.tailscale`. Use this for daily signing.
+* `OpenKeychain-remote-signing-preview.apk`: debuggable development build,
+  package `org.sufficientlysecure.keychain.debug`.
+
+Both install alongside upstream OpenKeychain and have separate private storage.
+Stable certificates come from these repository secrets (Settings → Secrets and
+variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `RELEASE_KEYSTORE_BASE64` | `base64 -w0 release.p12` |
+| `RELEASE_KEYSTORE_PASSWORD` | keystore and key password |
+| `RELEASE_KEY_ALIAS` | key alias |
+| `DEBUG_KEYSTORE_BASE64` | `base64 -w0 debug.p12` |
+| `DEBUG_KEYSTORE_PASSWORD` | keystore and key password |
+| `DEBUG_KEY_ALIAS` | key alias |
+
+Without the release secrets the release APK is unsigned and not published;
+without the debug secrets the debug APK uses the runner's temporary key, as
+earlier previews did. The workflow prints each APK's certificate digest. Locally,
+set `RELEASE_KEYSTORE_FILE` (or the `signingStoreLocation` Gradle properties) to
+sign a release build. Losing the release keystore ends in-place upgrades.
+
+Earlier previews were signed with temporary keys and cannot be upgraded in place.
+Export a protected key backup in the old app, install the new APK, import and test
+the key, and only then uninstall the old app. The new app enrolls as a new
+Tailscale node; revoke the old node and create a new gpg-bridge string.
 
 ## Verification
 

@@ -55,7 +55,7 @@ public final class RemoteSignApprovalActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) {
             password.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         }
-        char[] prefilled = RemoteAgentService.prefilledPassphrase(request.key.fingerprint);
+        char[] prefilled = RemoteAgentService.approvalPassphrase(this, request.key.fingerprint);
         if (prefilled != null) {
             try { password.setText(prefilled, 0, prefilled.length); }
             finally { Arrays.fill(prefilled, '\0'); }

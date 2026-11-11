@@ -2,7 +2,7 @@
 <resources>
     <string name="remote_agent_title">Tailscale 远端签名</string>
     <string name="remote_agent_settings_summary">让 CodexCloud 使用此手机上的密钥签名</string>
-    <string name="remote_agent_explanation">应用内接入 Tailscale，无需系统 VPN。Assuan 使用 tailnet 端口 17373，gpg-bridge 使用 17389。节点框留空允许全部 Tailscale 节点，填写后仅允许指定节点。可选择单个签名密钥或全选，每次签名均需手机确认。需要 Android 7 或更高版本。</string>
+    <string name="remote_agent_explanation">应用内接入 Tailscale，无需系统 VPN。Assuan 使用 tailnet 端口 17373，gpg-bridge 使用 17389。节点框留空允许全部 Tailscale 节点，填写后仅允许指定节点。可选择单个签名密钥或全选。除非为 gpg-bridge 的 Git 签名开启自动批准，每次签名均需手机确认。需要 Android 7 或更高版本。</string>
     <string name="remote_agent_hostname">Tailscale 设备名称</string>
     <string name="remote_agent_control">控制服务器 HTTPS 地址（留空使用 Tailscale）</string>
     <string name="remote_agent_peers">允许的稳定节点 ID（逗号分隔，留空允许全部节点）</string>
@@ -39,13 +39,36 @@
     <string name="remote_agent_status_no_address">尚未分配</string>
     <string name="remote_agent_status_health">健康状态：%1$s</string>
     <string name="remote_bridge_pair">创建或查看 gpg-bridge 连接串</string>
-    <string name="remote_bridge_revoke">撤销 gpg-bridge 会话</string>
+    <string name="remote_bridge_revoke">撤销 gpg-bridge 连接串</string>
     <string name="remote_bridge_copy">复制连接串</string>
     <string name="remote_bridge_active">gpg-bridge 有效至 %1$s（tailnet 端口 17389）</string>
     <string name="remote_bridge_inactive">gpg-bridge 会话未启用</string>
     <string name="remote_bridge_create_failed">请先连接并登录 Tailscale、选择签名密钥、配置允许的节点，再重试。</string>
-    <string name="remote_bridge_ticket_details">在已授权的云端节点运行 gpg-bridge connect，并粘贴此临时凭证。有效期为 8 小时，撤销会话或断开连接即失效，每次签名仍需手机确认。请勿把连接串写入日志或提交到仓库。</string>
+    <string name="remote_bridge_ticket_details">在已授权的云端节点运行 gpg-bridge connect，并粘贴此凭证。在此处撤销之前一直有效，手机重启后也有效。请勿把连接串写入日志或提交到仓库。</string>
     <string name="remote_bridge_content">远端提供的 Git 对象原文（预览，最多 8192 字符，控制字符已转义）：\n\n%1$s</string>
     <string name="remote_bridge_bytes">原始数据：%1$d 字节</string>
     <string name="remote_bridge_truncated">[预览已截断，签名覆盖全部原始字节。]</string>
+    <string name="remote_bridge_active_persistent">gpg-bridge 已启用（tailnet 端口 17389），连接串在撤销前一直有效</string>
+    <string name="remote_bridge_saved_inactive">已保存 gpg-bridge 连接串，Tailscale 连接后自动恢复</string>
+    <string name="remote_agent_auto_approve">自动批准 gpg-bridge 的 Git commit 和 tag 签名</string>
+    <string name="remote_agent_auto_approve_warning">通过 gpg-bridge 请求的 Git commit 和 tag 将不经确认直接签名，使用已保存的口令（无口令的密钥则直接签）。在你撤销之前，任何持有连接串、并能经由允许的 tailnet 节点访问这台手机的人，都能以你的名义签名。Assuan 请求仍需手动确认。每次自动签名后会弹出通知。</string>
+    <string name="remote_agent_enable">开启</string>
+    <string name="remote_agent_start_on_boot">手机开机后自动启动远程签名</string>
+    <string name="remote_agent_saved_passwords">在本机保存密钥口令</string>
+    <string name="remote_agent_saved_password_details">使用不可导出的 Android Keystore 密钥加密保存。用于自动填写确认界面，以及 gpg-bridge 自动签名。重启后仍保留，清除应用数据时删除。保存前会先校验口令。</string>
+    <string name="remote_agent_saved_password_marker">已在本机保存口令</string>
+    <string name="remote_agent_saved_password_stored">口令校验通过，已保存。</string>
+    <string name="remote_agent_saved_password_wrong">口令不正确，未保存。</string>
+    <string name="remote_agent_saved_password_failed">保存口令失败，请查看诊断日志。</string>
+    <string name="remote_agent_saved_password_removed">已删除保存的口令。</string>
+    <string name="remote_agent_saved_password_remove">删除</string>
+    <string name="remote_agent_saved_password_save">保存</string>
+    <string name="remote_agent_clear_saved_passwords">删除所有已保存的口令</string>
+    <string name="remote_agent_saved_passwords_cleared">已删除所有已保存的口令。</string>
+    <string name="remote_bridge_auto_signed">已通过 gpg-bridge 自动签名</string>
+    <string name="remote_bridge_auto_signed_details">%1$s
+节点：%2$s
+密钥：%3$s
+%4$s
+SHA-256：%5$s…</string>
 </resources>

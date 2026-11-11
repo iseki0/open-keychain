@@ -98,6 +98,29 @@ public final class RemoteSigningRepository {
         return new JSONObject().put("keys", metadata).put("public_keys", publicKeys.toString()).toString();
     }
 
+    /** Checks a passphrase by unlocking the selected subkey locally. Always wipes passphrase. */
+    public boolean checkPassphrase(RemoteSigningKey selected, char[] passphrase)
+            throws NotFoundException, PgpGeneralException, GeneralSecurityException {
+        Passphrase localPassphrase = new Passphrase(passphrase);
+        try {
+            CanonicalizedSecretKeyRing ring = repository.getCanonicalizedSecretKeyRing(selected.masterKeyId);
+            for (CanonicalizedSecretKey candidate : ring.secretKeyIterator()) {
+                if (candidate.getKeyId() == selected.subKeyId) {
+                    if (!supported(candidate)) throw new GeneralSecurityException("Signing key is unsupported");
+                    return candidate.unlock(localPassphrase);
+                }
+            }
+            throw new GeneralSecurityException("Signing key is unavailable");
+        } finally {
+            localPassphrase.removeFromMemory();
+        }
+    }
+
+    /** True when the selected subkey's secret material is stored without a passphrase. */
+    public boolean hasEmptyPassphrase(RemoteSigningKey selected) throws NotFoundException {
+        return repository.getSecretKeyType(selected.subKeyId) == SecretKeyType.PASSPHRASE_EMPTY;
+    }
+
     /**
      * Signs the exact raw gpg-bridge message after local approval. Consumes and wipes
      * passphrase. The caller must enforce its current fingerprint and peer allowlists.

@@ -34,9 +34,11 @@ import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningKey;
 import org.sufficientlysecure.keychain.remoteagent.crypto.RemoteSigningRepository;
 
 public final class RemoteAgentActivity extends Activity {
+    /** Matches bridgePersistentExpires in native/tailscale/gpgbridge.go. */
+    private static final long PERSISTENT_BRIDGE_EXPIRY = 4102444800L;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private EditText hostname, control, peers;
-    private CheckBox allNodes, allKeys;
+    private CheckBox allNodes, allKeys, autoApprove, startOnBoot;
     private TextView status;
     private Button login;
     private Button bridgePair;
@@ -105,6 +107,36 @@ public final class RemoteAgentActivity extends Activity {
             RemoteAgentService.clearPrefilledPassphrases();
             message(R.string.remote_agent_passwords_cleared);
         });
+        button(content, R.string.remote_agent_saved_passwords, this::chooseSavedPassphraseKey);
+        button(content, R.string.remote_agent_clear_saved_passwords, () -> new Thread(() -> {
+            RemoteAgentSecrets.clearPassphrases(this);
+            runOnUiThread(() -> message(R.string.remote_agent_saved_passwords_cleared));
+        }, "clear-saved-passphrases").start());
+        autoApprove = new CheckBox(this);
+        autoApprove.setText(R.string.remote_agent_auto_approve);
+        autoApprove.setChecked(RemoteAgentConfig.autoApproveBridge(this));
+        autoApprove.setOnCheckedChangeListener((button, checked) -> {
+            if (!checked) {
+                settings.edit().putBoolean("auto_approve_bridge", false).apply();
+                return;
+            }
+            if (RemoteAgentConfig.autoApproveBridge(this)) return;
+            AlertDialog confirm = new AlertDialog.Builder(this).setTitle(R.string.remote_agent_auto_approve)
+                    .setMessage(R.string.remote_agent_auto_approve_warning)
+                    .setPositiveButton(R.string.remote_agent_enable, (dialog, which) ->
+                            settings.edit().putBoolean("auto_approve_bridge", true).apply())
+                    .setNegativeButton(android.R.string.cancel, null).create();
+            confirm.setOnDismissListener(dialog -> autoApprove.setChecked(RemoteAgentConfig.autoApproveBridge(this)));
+            confirm.show();
+            confirm.getButton(AlertDialog.BUTTON_POSITIVE).setFilterTouchesWhenObscured(true);
+        });
+        content.addView(autoApprove);
+        startOnBoot = new CheckBox(this);
+        startOnBoot.setText(R.string.remote_agent_start_on_boot);
+        startOnBoot.setChecked(RemoteAgentConfig.startOnBoot(this));
+        startOnBoot.setOnCheckedChangeListener((button, checked) ->
+                settings.edit().putBoolean("start_on_boot", checked).apply());
+        content.addView(startOnBoot);
         button(content, R.string.remote_agent_connect, this::connect);
         button(content, R.string.remote_agent_disconnect,
                 () -> stopService(new Intent(this, RemoteAgentService.class)));
@@ -113,7 +145,10 @@ public final class RemoteAgentActivity extends Activity {
         });
         login.setEnabled(false);
         bridgePair = button(content, R.string.remote_bridge_pair, this::pairBridge);
-        button(content, R.string.remote_bridge_revoke, RemoteAgentService::revokeBridge);
+        button(content, R.string.remote_bridge_revoke, () -> new Thread(() -> {
+            RemoteAgentService.revokeBridge(this);
+            runOnUiThread(() -> shownBridgeExpiry = Long.MIN_VALUE);
+        }, "revoke-gpg-bridge").start());
         bridgeStatus = new TextView(this);
         content.addView(bridgeStatus);
     }
@@ -255,6 +290,93 @@ public final class RemoteAgentActivity extends Activity {
         }, "signing-passphrase-keys").start();
     }
 
+    private void chooseSavedPassphraseKey() {
+        new Thread(() -> {
+            try {
+                List<RemoteSigningKey> keys = RemoteAgentConfig.selectedKeys(this, new RemoteSigningRepository(this));
+                boolean[] saved = new boolean[keys.size()];
+                for (int i = 0; i < keys.size(); i++) saved[i] = RemoteAgentSecrets.hasPassphrase(this, keys.get(i).fingerprint);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (keys.isEmpty()) { message(R.string.remote_agent_no_keys); return; }
+                    CharSequence[] labels = new CharSequence[keys.size()];
+                    for (int i = 0; i < keys.size(); i++) {
+                        RemoteSigningKey key = keys.get(i);
+                        labels[i] = key.userId + "\n" + key.algorithmName + "\n" + key.fingerprint
+                                + (saved[i] ? "\n" + getString(R.string.remote_agent_saved_password_marker) : "");
+                    }
+                    new AlertDialog.Builder(this).setTitle(R.string.remote_agent_saved_passwords)
+                            .setItems(labels, (dialog, position) -> editSavedPassphrase(keys.get(position)))
+                            .setNegativeButton(android.R.string.cancel, null).show();
+                });
+            } catch (Exception failure) {
+                RemoteAgentDiagnostics.error("Reading signing keys for saved passphrases failed", failure);
+                runOnUiThread(() -> message(R.string.remote_agent_no_keys));
+            }
+        }, "saved-passphrase-keys").start();
+    }
+
+    private void editSavedPassphrase(RemoteSigningKey key) {
+        if (passphraseDialog != null) passphraseDialog.dismiss();
+        EditText password = new EditText(this);
+        password.setHint(R.string.remote_agent_key_password);
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setSingleLine(true);
+        password.setSaveEnabled(false);
+        if (Build.VERSION.SDK_INT >= 26) {
+            password.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(R.string.remote_agent_saved_passwords)
+                .setMessage(key.userId + "\n" + key.fingerprint + "\n\n"
+                        + getString(R.string.remote_agent_saved_password_details))
+                .setView(password)
+                .setPositiveButton(R.string.remote_agent_saved_password_save, (window, which) -> {
+                    char[] value = new char[password.length()];
+                    password.getText().getChars(0, value.length, value, 0);
+                    password.getText().clear();
+                    new Thread(() -> saveCheckedPassphrase(key, value), "save-passphrase").start();
+                }).setNeutralButton(R.string.remote_agent_saved_password_remove, (window, which) -> new Thread(() -> {
+                    try {
+                        RemoteAgentSecrets.savePassphrase(this, key.fingerprint, new char[0]);
+                        runOnUiThread(() -> message(R.string.remote_agent_saved_password_removed));
+                    } catch (Exception failure) {
+                        RemoteAgentDiagnostics.error("Removing a saved passphrase failed", failure);
+                    }
+                }, "remove-passphrase").start())
+                .setNegativeButton(android.R.string.cancel, null).create();
+        passphraseDialog = dialog;
+        passphraseSession = null;
+        dialog.setOnDismissListener(window -> {
+            password.getText().clear();
+            if (passphraseDialog == dialog) passphraseDialog = null;
+        });
+        dialog.show();
+        dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setFilterTouchesWhenObscured(true);
+    }
+
+    /** Runs on a worker. Consumes value. Saves only a passphrase that unlocks the key. */
+    private void saveCheckedPassphrase(RemoteSigningKey key, char[] value) {
+        int result;
+        char[] check = value.clone();
+        try {
+            if (!new RemoteSigningRepository(this).checkPassphrase(key, check)) {
+                result = R.string.remote_agent_saved_password_wrong;
+            } else {
+                RemoteAgentSecrets.savePassphrase(this, key.fingerprint, value);
+                result = R.string.remote_agent_saved_password_stored;
+            }
+        } catch (Exception failure) {
+            RemoteAgentDiagnostics.error("Saving a passphrase failed", failure);
+            result = R.string.remote_agent_saved_password_failed;
+        } finally {
+            Arrays.fill(check, '\0');
+            Arrays.fill(value, '\0');
+        }
+        int message = result;
+        runOnUiThread(() -> message(message));
+    }
+
     private void editPassphrase(RemoteSigningKey key) {
         if (passphraseDialog != null) passphraseDialog.dismiss();
         Object session = RemoteAgentService.passphraseSession();
@@ -300,7 +422,8 @@ public final class RemoteAgentActivity extends Activity {
     }
 
     private void refreshStatus() {
-        if (passphraseDialog != null && !RemoteAgentService.isPassphraseSession(passphraseSession)) {
+        if (passphraseDialog != null && passphraseSession != null
+                && !RemoteAgentService.isPassphraseSession(passphraseSession)) {
             passphraseDialog.dismiss();
         }
         RemoteAgentStatus snapshot = RemoteAgentService.status();
@@ -316,9 +439,13 @@ public final class RemoteAgentActivity extends Activity {
         long visibleExpiry = expiry > System.currentTimeMillis() / 1000 ? expiry : 0;
         if (visibleExpiry != shownBridgeExpiry) {
             shownBridgeExpiry = visibleExpiry;
-            if (visibleExpiry > 0) {
+            if (visibleExpiry >= PERSISTENT_BRIDGE_EXPIRY) {
+                bridgeStatus.setText(R.string.remote_bridge_active_persistent);
+            } else if (visibleExpiry > 0) {
                 bridgeStatus.setText(getString(R.string.remote_bridge_active,
                         java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(visibleExpiry * 1000))));
+            } else if (RemoteAgentSecrets.hasBridgeState(this)) {
+                bridgeStatus.setText(R.string.remote_bridge_saved_inactive);
             } else bridgeStatus.setText(R.string.remote_bridge_inactive);
         }
     }

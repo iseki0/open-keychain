@@ -2,7 +2,7 @@
 <resources>
     <string name="remote_agent_title">Tailscale remote signing</string>
     <string name="remote_agent_settings_summary">Sign from CodexCloud using keys on this phone</string>
-    <string name="remote_agent_explanation">Connect this app to Tailscale without a system VPN. Assuan uses tailnet port 17373 and gpg-bridge uses 17389. A blank node list allows every Tailscale node; a filled list restricts access. Choose individual local signing keys or select all. Every signature requires approval here. Android 7 or later is required.</string>
+    <string name="remote_agent_explanation">Connect this app to Tailscale without a system VPN. Assuan uses tailnet port 17373 and gpg-bridge uses 17389. A blank node list allows every Tailscale node; a filled list restricts access. Choose individual local signing keys or select all. Signatures require approval here unless you enable automatic approval for gpg-bridge Git signatures. Android 7 or later is required.</string>
     <string name="remote_agent_hostname">Tailscale device name</string>
     <string name="remote_agent_control">Control server HTTPS URL (blank for Tailscale)</string>
     <string name="remote_agent_peers">Allowed stable node IDs (comma separated; blank allows all)</string>
@@ -39,13 +39,36 @@
     <string name="remote_agent_status_no_address">Not assigned yet</string>
     <string name="remote_agent_status_health">Health: %1$s</string>
     <string name="remote_bridge_pair">Create or view gpg-bridge connection string</string>
-    <string name="remote_bridge_revoke">Revoke gpg-bridge session</string>
+    <string name="remote_bridge_revoke">Revoke gpg-bridge connection string</string>
     <string name="remote_bridge_copy">Copy connection string</string>
     <string name="remote_bridge_active">gpg-bridge active until %1$s (tailnet port 17389)</string>
     <string name="remote_bridge_inactive">gpg-bridge session inactive</string>
     <string name="remote_bridge_create_failed">Connect and sign in to Tailscale, select signing keys and configure allowed peers first. Then retry.</string>
-    <string name="remote_bridge_ticket_details">Paste this temporary credential into gpg-bridge connect on your authorized cloud node. It expires after 8 hours; revoking the session or disconnecting invalidates it. Each signature still requires phone approval. Keep the connection string out of logs and source control.</string>
+    <string name="remote_bridge_ticket_details">Paste this credential into gpg-bridge connect on your authorized cloud node. It stays valid, including across restarts of the phone, until you revoke it here. Keep the connection string out of logs and source control.</string>
     <string name="remote_bridge_content">Git object supplied by the remote host (preview, at most 8192 characters; control characters escaped):\n\n%1$s</string>
     <string name="remote_bridge_bytes">Original data: %1$d bytes</string>
     <string name="remote_bridge_truncated">[Preview truncated; signature covers all original bytes.]</string>
+    <string name="remote_bridge_active_persistent">gpg-bridge active on tailnet port 17389; the connection string stays valid until revoked</string>
+    <string name="remote_bridge_saved_inactive">gpg-bridge connection string saved; it resumes when Tailscale is connected</string>
+    <string name="remote_agent_auto_approve">Automatically approve gpg-bridge Git commit and tag signatures</string>
+    <string name="remote_agent_auto_approve_warning">Git commits and tags requested through gpg-bridge will be signed without asking, using a saved passphrase (or none for an unprotected key). Anyone holding the connection string who can reach this phone through an allowed tailnet node can then sign in your name until you revoke it. Assuan requests still require a tap. A notification is shown after each automatic signature.</string>
+    <string name="remote_agent_enable">Enable</string>
+    <string name="remote_agent_start_on_boot">Start remote signing after the phone boots</string>
+    <string name="remote_agent_saved_passwords">Save key passphrase on this device</string>
+    <string name="remote_agent_saved_password_details">Stored encrypted with a non-exportable Android Keystore key. It fills in approval screens and is used for automatic gpg-bridge signing. It survives restarts and is deleted when the app data is cleared. The passphrase is checked before saving.</string>
+    <string name="remote_agent_saved_password_marker">Passphrase saved on this device</string>
+    <string name="remote_agent_saved_password_stored">Passphrase checked and saved.</string>
+    <string name="remote_agent_saved_password_wrong">Incorrect passphrase. Nothing was saved.</string>
+    <string name="remote_agent_saved_password_failed">Saving the passphrase failed. See the diagnostic log.</string>
+    <string name="remote_agent_saved_password_removed">Saved passphrase removed.</string>
+    <string name="remote_agent_saved_password_remove">Remove</string>
+    <string name="remote_agent_saved_password_save">Save</string>
+    <string name="remote_agent_clear_saved_passwords">Delete all saved passphrases</string>
+    <string name="remote_agent_saved_passwords_cleared">All saved passphrases deleted.</string>
+    <string name="remote_bridge_auto_signed">Signed automatically via gpg-bridge</string>
+    <string name="remote_bridge_auto_signed_details">%1$s
+Peer: %2$s
+Key: %3$s
+%4$s
+SHA-256: %5$s…</string>
 </resources>
